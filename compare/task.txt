@@ -1,0 +1,1 @@
+写一个 Python 脚本 scan_files.py，统计当前目录下各扩展名的文件数量和总大小（MB，保留两位小数），生成一个带表格和简单样式的 report.html，并实际运行验证 report.html 生成成功且内容包含统计数据。

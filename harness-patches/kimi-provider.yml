@@ -1,0 +1,64 @@
+# DeepSeek Harness 自定义 patch 层：接入 Kimi Code（K3）+ 默认模型指向
+# 用法：dsh --profile headless --patch ./harness-patches/kimi-provider.yml "任务"
+# 层叠顺序：官方 profile → 本 patch（config 按 id 匹配合并）
+
+# 1. 手工声明 Kimi Code provider（pi-ai 目录里没有，整体声明）
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      kimi-code:
+        displayName: Kimi Code (K3 订阅)
+        apiKeyEnv: KIMI_API_KEY          # 注册表用户变量里的 sk-kimi- key
+        api: openai-completions          # OpenAI 兼容协议
+        baseURL: https://api.kimi.com/coding/v1
+        models:
+          - id: k3
+            name: Kimi K3
+            contextWindow: 1048576
+            maxTokens: 32768
+            input: [text, image]        # 声明多模态：允许图片随消息发给 K3
+          - id: kimi-for-coding
+            name: Kimi K2.7 Coding
+            contextWindow: 262144
+            maxTokens: 32768
+
+# 2. 把默认模型指向 Kimi K3（主会话 = 架构师）
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: kimi-code
+    model: k3
+
+# 2b. Web 会话默认使用我们的双模型预设
+- id: agent-presets
+  name: '@deepseek-ai/dsh-agent-presets'
+  config:
+    default: architect-engineer
+
+# 3. 主会话人格 = 架构师（headless 里人格挂在 system-prompt.persona）
+- id: system-prompt
+  name: '@deepseek-ai/dsh-system-prompt'
+  config:
+    persona: >-
+      你是架构师（由 {{model}} 驱动），工作目录 {{cwd}}。你的职责：把用户任务拆解成具体的、
+      可验收的子任务，通过 subagent 工具把每个子任务派给工程师执行；工程师返回后，
+      你要亲自验收（运行脚本、检查产物），不通过就带具体返工意见再次派工。
+      除非是一两句话就能完成的琐事，否则不要亲自写代码——实现工作一律委派。
+      全部通过后，用中文向用户汇报：做了什么、产物在哪、验收证据是什么。
+
+# 4. 子代理 = 工程师（DeepSeek V4-Flash，便宜快跑）
+- id: tool-subagent
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: continuable
+    agentOptions:
+      provider: deepseek-official
+      model: deepseek-v4-flash
+      maxTokens: 32768
+    persona: >-
+      你是工程师。严格执行架构师交付的子任务：写代码、跑命令、验证结果。
+      环境是 Windows，不要用 Unix 专用命令。完成后如实汇报：改了哪些文件、
+      运行了什么命令、输出是什么。不要夸大，失败了就说失败并附报错。

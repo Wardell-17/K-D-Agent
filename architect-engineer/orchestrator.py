@@ -1,0 +1,381 @@
+"""
+架构师 + 工程师 多模型编排器（MVP）
+=====================================
+设计蓝本：《深入理解 AI Agent》（李博杰）实验 10-2 管理者模式 + 10.4.3.2 提议者-审核者范式。
+
+核心架构决策（每条都能在书中找到依据）：
+1. 不共享上下文（10.4）：架构师(Kimi K3)与工程师(DeepSeek V4-Flash)各自维护独立
+   对话历史，只通过"移交包"通信——这也天然满足 K3 不可接续异源历史的约束。
+2. 移交包三要素（10.4.5）：任务描述+验收标准 / 已确认事实与约束 / 产物文件引用。
+3. 验证器是循环的瓶颈（10.4.3.1 Loop 工程）：子任务"是否完成"不由工程师自己宣布，
+   而由可执行的验收检查（命令/测试）产出证据，架构师基于证据验收。
+4. 状态栏用纯代码维护（2.6）：轮数、工具调用计数、剩余预算由 harness 计算注入，
+   绝不让 LLM 统计自己的历史。
+5. 强模型给规划者（Plan-and-Act, 10.4.4）：最贵最强的 K3 只做规划与验收，
+   高频执行全部交给 2 元/百万 tokens 的 V4-Flash。
+6. 模型层配置化（1.2.4）：模型名、端点、价格全在 config.yaml，换模型不改代码。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+
+import yaml
+from openai import OpenAI
+
+ROOT = Path(__file__).resolve().parent
+CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# 成本追踪（书 6.6.3：Agent 系统的成本分析；10.2：多 Agent 收益必须覆盖成本）
+# ---------------------------------------------------------------------------
+class CostTracker:
+    """按模型分别累计 token 与费用（元），逐次调用追加写入 cost.jsonl。"""
+
+    def __init__(self, log_path: Path):
+        self.log_path = log_path
+        self.records: list[dict] = []
+
+    def record(self, role: str, model_cfg: dict, usage) -> dict:
+        # OpenAI 兼容接口的 usage；DeepSeek 会额外返回 prompt_cache_hit_tokens
+        prompt = getattr(usage, "prompt_tokens", 0) or 0
+        completion = getattr(usage, "completion_tokens", 0) or 0
+        hit = getattr(usage, "prompt_cache_hit_tokens", 0) or 0
+        miss = max(prompt - hit, 0)
+        p = model_cfg["price"]
+        cost = (hit * p["input_hit"] + miss * p["input_miss"]) / 1e6 \
+             + completion * p["output"] / 1e6
+        rec = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "role": role, "model": model_cfg["model"],
+            "prompt_tokens": prompt, "cache_hit": hit,
+            "completion_tokens": completion, "cost_cny": round(cost, 6),
+        }
+        self.records.append(rec)
+        with self.log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        return rec
+
+    def summary(self) -> str:
+        by_role: dict[str, dict] = {}
+        for r in self.records:
+            b = by_role.setdefault(r["role"], {"calls": 0, "tokens": 0, "cost": 0.0})
+            b["calls"] += 1
+            b["tokens"] += r["prompt_tokens"] + r["completion_tokens"]
+            b["cost"] += r["cost_cny"]
+        lines = ["\n===== 成本汇总 ====="]
+        total = 0.0
+        for role, b in by_role.items():
+            total += b["cost"]
+            lines.append(f"{role:10s} 调用 {b['calls']:3d} 次 | tokens {b['tokens']:>8,} | ¥{b['cost']:.4f}")
+        lines.append(f"{'合计':10s} {'':13s} {'':13s} ¥{total:.4f}")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# 模型客户端（OpenAI 兼容；两家只是配置不同）
+# ---------------------------------------------------------------------------
+class LLM:
+    def __init__(self, name: str, tracker: CostTracker):
+        cfg = CONFIG["models"][name]
+        key = os.environ.get(cfg["api_key_env"])
+        if not key:
+            raise RuntimeError(f"缺少环境变量 {cfg['api_key_env']}，请先设置 API key")
+        self.name, self.cfg = name, cfg
+        self.client = OpenAI(api_key=key, base_url=cfg["base_url"], timeout=300.0,
+                             default_headers=cfg.get("headers") or None)
+        self.tracker = tracker
+
+    def chat(self, messages: list[dict], tools: list[dict] | None = None):
+        kwargs = dict(model=self.cfg["model"], messages=messages,
+                      max_tokens=self.cfg.get("max_tokens", 8192))
+        if tools:
+            kwargs["tools"] = tools
+        resp = self.client.chat.completions.create(**kwargs)
+        if getattr(resp, "usage", None):
+            self.tracker.record(self.name, self.cfg, resp.usage)
+        return resp.choices[0].message
+
+
+def ask_json(llm: LLM, system: str, user: str) -> dict:
+    """让模型输出 JSON 并解析；失败则重试一次并要求只输出 JSON。"""
+    for attempt in range(2):
+        msg = llm.chat([{"role": "system", "content": system},
+                        {"role": "user", "content": user}])
+        text = msg.content or ""
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except json.JSONDecodeError:
+                pass
+        user = "你的上一次输出不是合法 JSON。请只输出一个 JSON 对象，不要任何解释。\n" + text[:500]
+    raise RuntimeError(f"{llm.name} 连续两次未能输出合法 JSON")
+
+
+# ---------------------------------------------------------------------------
+# 移交包（书 10.4.5：任务描述 / 已确认事实与约束 / 产物引用）
+# ---------------------------------------------------------------------------
+@dataclass
+class HandoffPacket:
+    task_id: str
+    goal: str                        # 这个子任务要做什么
+    acceptance: list[str]            # 验收标准（可执行检查命令或明确判据）
+    confirmed_facts: list[str] = field(default_factory=list)   # 已确认的事实与约束
+    artifact_refs: list[str] = field(default_factory=list)     # 相关文件路径（引用而非内容）
+    remaining_budget: int = 12       # 剩余 ReAct 轮数预算（budget-aware, 书10.2）
+    visited: list[str] = field(default_factory=list)           # 循环检测
+
+
+# ---------------------------------------------------------------------------
+# 工程师工具集（约束：故障安全默认值——只能在工作目录内读写，命令有黑名单）
+# ---------------------------------------------------------------------------
+class Toolbox:
+    def __init__(self, workdir: Path):
+        self.workdir = workdir.resolve()
+        self.call_counts: dict[str, int] = {}
+        ecfg = CONFIG["engineer_tools"]
+        self.allow_cmd = ecfg["allow_run_command"]
+        self.cmd_timeout = ecfg["command_timeout_sec"]
+        self.deny = [re.compile(p) for p in ecfg["command_deny_patterns"]]
+
+    def _safe(self, rel: str) -> Path:
+        p = (self.workdir / rel).resolve()
+        if not str(p).startswith(str(self.workdir)):
+            raise PermissionError(f"路径越界被拒绝: {rel}")
+        return p
+
+    def count(self, name: str):
+        self.call_counts[name] = self.call_counts.get(name, 0) + 1
+
+    def status_bar(self, remaining: int) -> str:
+        # 书 2.6：状态栏由代码维护，注入上下文末尾，模型"瞥一眼"即可
+        counts = ", ".join(f"{k}×{v}" for k, v in self.call_counts.items()) or "无"
+        return (f"<agent_status>\n剩余轮数预算: {remaining}\n"
+                f"工具调用计数: {counts}\n工作目录: {self.workdir}\n</agent_status>")
+
+    def definitions(self) -> list[dict]:
+        def fn(name, desc, props, required):
+            return {"type": "function", "function": {
+                "name": name, "description": desc,
+                "parameters": {"type": "object", "properties": props, "required": required}}}
+        tools = [
+            fn("read_file", "读取工作目录中的文件内容", {"path": {"type": "string"}}, ["path"]),
+            fn("write_file", "把内容写入工作目录中的文件（自动创建父目录）",
+               {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
+            fn("list_dir", "列出工作目录（或子目录）下的文件",
+               {"path": {"type": "string", "description": "相对路径，默认 ."}}, []),
+            fn("finish", "子任务完成时调用，提交结构化总结（不代表已验收）",
+               {"summary": {"type": "string", "description": "做了什么、改了哪些文件、已知风险"}},
+               ["summary"]),
+        ]
+        if self.allow_cmd:
+            tools.insert(3, fn("run_command",
+                               "在工作目录中执行 shell 命令（有超时与黑名单限制），用于运行测试/脚本",
+                               {"command": {"type": "string"}}, ["command"]))
+        return tools
+
+    def execute(self, name: str, args: dict) -> str:
+        self.count(name)
+        try:
+            if name == "read_file":
+                return self._safe(args["path"]).read_text(encoding="utf-8")[:20000]
+            if name == "write_file":
+                p = self._safe(args["path"])
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(args["content"], encoding="utf-8")
+                return f"已写入 {p}（{len(args['content'])} 字符）"
+            if name == "list_dir":
+                p = self._safe(args.get("path", "."))
+                return "\n".join(sorted(x.name for x in p.iterdir())) or "(空目录)"
+            if name == "run_command":
+                cmd = args["command"]
+                if any(d.search(cmd) for d in self.deny):
+                    return "错误：命令命中安全黑名单，已拒绝执行"
+                r = subprocess.run(cmd, shell=True, cwd=self.workdir,
+                                   capture_output=True, text=True,
+                                   timeout=self.cmd_timeout, encoding="utf-8", errors="replace")
+                out = (r.stdout + r.stderr).strip()
+                return f"exit={r.returncode}\n{out[:8000]}"
+            return f"错误：未知工具 {name}"
+        except Exception as e:  # 纠正机制：错误以文本形式回传，让模型自我恢复
+            return f"工具执行异常: {type(e).__name__}: {e}"
+
+
+# ---------------------------------------------------------------------------
+# 工程师：DeepSeek V4-Flash，独立上下文 + ReAct 循环
+# ---------------------------------------------------------------------------
+ENGINEER_SYS = """你是一名执行工程师。你收到一个结构化的任务移交包（JSON），包含：
+goal（要做什么）、acceptance（验收标准）、confirmed_facts（已确认的事实与约束）、
+artifact_refs（相关文件路径，需自行读取）。
+
+工作纪律：
+1. 先读 artifact_refs 里的相关文件，再动手；
+2. 每完成一步用 run_command 实际验证（跑测试/脚本），不要凭感觉声明完成；
+3. 遇到命令失败，读错误输出、修复、重试；同一错误连续两次则换方案；
+4. 完成后调用 finish 提交总结——finish 是"我做完了一步"，最终验收由架构师基于
+   实际执行结果判定，不由你宣布。"""
+
+
+def run_engineer(packet: HandoffPacket, workdir: Path, llm: LLM) -> dict:
+    tb = Toolbox(workdir)
+    messages = [
+        {"role": "system", "content": ENGINEER_SYS},
+        {"role": "user", "content": "任务移交包：\n" + json.dumps(asdict(packet), ensure_ascii=False, indent=2)},
+    ]
+    budget = packet.remaining_budget
+    text_only_streak = 0
+    while budget > 0:
+        # 状态栏注入（代码维护，不占用 LLM 统计）
+        msgs = messages + ([{"role": "user", "content": tb.status_bar(budget)}]
+                           if CONFIG["logging"]["status_bar"] else [])
+        msg = llm.chat(msgs, tools=tb.definitions())
+        messages.append({"role": "assistant", "content": msg.content or "",
+                         **({"tool_calls": [tc.model_dump() for tc in msg.tool_calls]}
+                            if msg.tool_calls else {})})
+        if not msg.tool_calls:
+            text_only_streak += 1
+            # 连续两次纯文字回复：视为"做完了但没打卡"，以最后一段文字为总结收尾
+            # （反正最终判定权在验证器+架构师，不以它的自述为准）
+            if text_only_streak >= 2:
+                return {"status": "finished_implicit",
+                        "summary": (msg.content or "")[:2000],
+                        "tool_calls": tb.call_counts}
+            messages.append({"role": "user", "content":
+                "如果你已完成本任务，请调用 finish 工具提交结构化总结；"
+                "如果还没完成，请继续用工具推进。"})
+            budget -= 1
+            continue
+        text_only_streak = 0
+        for tc in msg.tool_calls:
+            name = tc.function.name
+            args = json.loads(tc.function.arguments or "{}")
+            if name == "finish":
+                return {"status": "finished", "summary": args.get("summary", ""),
+                        "tool_calls": tb.call_counts}
+            result = tb.execute(name, args)
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+        budget -= 1
+    return {"status": "budget_exhausted", "summary": "轮数预算耗尽",
+            "tool_calls": tb.call_counts}
+
+
+# ---------------------------------------------------------------------------
+# 验证器（Loop 工程核心：完成的判定来自真实执行，不来自模型宣称）
+# ---------------------------------------------------------------------------
+def verify(packet: HandoffPacket, workdir: Path) -> dict:
+    """执行 acceptance 中的 shell 检查（以 '!' 开头的条目），其余条目留给架构师评判。"""
+    evidence, ok = [], True
+    for item in packet.acceptance:
+        if item.startswith("!"):
+            cmd = item[1:].strip()
+            try:
+                r = subprocess.run(cmd, shell=True, cwd=workdir, capture_output=True,
+                                   text=True, timeout=CONFIG["engineer_tools"]["command_timeout_sec"],
+                                   encoding="utf-8", errors="replace")
+                passed = r.returncode == 0
+                evidence.append({"check": cmd, "passed": passed,
+                                 "output": (r.stdout + r.stderr).strip()[:3000]})
+                ok = ok and passed
+            except Exception as e:
+                evidence.append({"check": cmd, "passed": False, "output": str(e)})
+                ok = False
+    return {"all_passed": ok, "evidence": evidence}
+
+
+# ---------------------------------------------------------------------------
+# 架构师：Kimi K3，只做两件事——拆任务、基于证据验收
+# ---------------------------------------------------------------------------
+ARCHITECT_PLAN_SYS = """你是首席架构师。把用户的任务拆解为 1-5 个可独立执行、可验证的子任务。
+只输出 JSON：{"subtasks": [{"task_id": "t1", "goal": "...",
+"acceptance": ["以!开头的是可执行验收命令，如 !python test.py；其余为文字判据"],
+"confirmed_facts": ["执行者必须遵守的约束与已知事实"],
+"artifact_refs": ["相关文件路径"], "remaining_budget": 12}]}
+原则：每个子任务必须有客观验收标准；事实与约束写全，执行者看不到本次对话。
+重要：运行环境是 Windows（cmd.exe，无 Unix 命令）。验收命令只能用 python、
+Windows 原生命令（dir/type/findstr）或 python -c 一行流；严禁 test/grep/cat/ls 等 Unix 命令。"""
+
+ARCHITECT_REVIEW_SYS = """你是首席架构师，正在验收工程师的工作。你会看到：
+移交包、工程师自述的总结、以及验证器对验收命令的真实执行结果（证据）。
+规则：证据失败则必须返工；工程师的总结只是自述，不能当作完成证明。
+只输出 JSON：{"verdict": "pass" 或 "rework", "reason": "...", 
+"fix_instructions": "若 rework，给工程师的具体修复指令" }"""
+
+
+class Orchestrator:
+    def __init__(self, task: str):
+        self.task = task
+        self.run_dir = ROOT / CONFIG["logging"]["dir"] / time.strftime("%Y%m%d-%H%M%S")
+        self.workdir = self.run_dir / "workspace"   # 产物区（工程师的工作目录）
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        (self.run_dir / "handoffs").mkdir()
+        self.tracker = CostTracker(self.run_dir / "cost.jsonl")
+        self.architect = LLM("architect", self.tracker)
+        self.engineer = LLM("engineer", self.tracker)
+
+    def log_handoff(self, name: str, payload: dict):
+        (self.run_dir / "handoffs" / name).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def run(self) -> dict:
+        print(f"[run] 目录: {self.run_dir}")
+        # 1. 架构师拆任务
+        plan = ask_json(self.architect, ARCHITECT_PLAN_SYS, f"用户任务：{self.task}")
+        self.log_handoff("plan.json", plan)
+        subtasks = plan.get("subtasks", [])
+        print(f"[architect] 拆解为 {len(subtasks)} 个子任务")
+
+        results = []
+        for st in subtasks:
+            packet = HandoffPacket(**{k: v for k, v in st.items() if k in HandoffPacket.__dataclass_fields__})
+            print(f"\n--- 子任务 {packet.task_id}: {packet.goal[:60]}")
+            failures = 0
+            while True:
+                # 2. 工程师执行
+                eng = run_engineer(packet, self.workdir, self.engineer)
+                print(f"[engineer] {eng['status']}: {eng['summary'][:80]}")
+                # 3. 验证器跑真实检查（产出新信息——执行证据）
+                ver = verify(packet, self.workdir)
+                # 4. 架构师基于证据验收（审核者读独立证据，而非只听提议者自述）
+                review = ask_json(self.architect, ARCHITECT_REVIEW_SYS, json.dumps({
+                    "packet": asdict(packet), "engineer_report": eng,
+                    "verification": ver}, ensure_ascii=False))
+                self.log_handoff(f"{packet.task_id}-review.json",
+                                 {"engineer": eng, "verification": ver, "review": review})
+                if review.get("verdict") == "pass" and ver["all_passed"]:
+                    print(f"[architect] ✓ 通过: {review.get('reason', '')[:80]}")
+                    results.append({"task_id": packet.task_id, "review": review})
+                    break
+                failures += 1
+                print(f"[architect] ✗ 返工({failures}): {review.get('fix_instructions', '')[:80]}")
+                if failures > CONFIG["escalation"]["max_verify_failures"]:
+                    # 升级策略：连续失败则记录并交还人工（人工干预，书 1.2.6.2）
+                    results.append({"task_id": packet.task_id, "verdict": "escalated",
+                                    "reason": "连续返工超限，需人工介入", "last_review": review})
+                    break
+                # 返工：把修复指令写入移交包（已确认事实追加，预算收紧）
+                packet.confirmed_facts.append("上次返工原因: " + review.get("fix_instructions", ""))
+                packet.remaining_budget = max(packet.remaining_budget // 2, 4)
+
+        report = {"task": self.task, "results": results,
+                  "cost": self.tracker.records, "run_dir": str(self.run_dir)}
+        (self.run_dir / "report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(self.tracker.summary())
+        print(f"\n[done] 报告: {self.run_dir / 'report.json'}")
+        return report
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print('用法: python orchestrator.py "你的任务描述"')
+        sys.exit(1)
+    Orchestrator(sys.argv[1]).run()

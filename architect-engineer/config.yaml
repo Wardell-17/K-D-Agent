@@ -1,0 +1,54 @@
+# ============================================================
+# 架构师 + 工程师 多模型编排器 · 配置
+# 所有模型相关的选择都在这里，换模型不改代码（书第1章：模型层配置化）
+# 价格单位：元 / 百万 tokens。请以官方定价页为准及时更新：
+#   DeepSeek: https://api-docs.deepseek.com/quick_start/pricing
+#   Kimi:     https://platform.kimi.com/docs/pricing
+# ============================================================
+
+models:
+  architect:                 # 规划 / 验收 / 长上下文与多模态任务
+    provider: kimi
+    model: k3                # Kimi Code 端点的模型 ID（不是 kimi-k3）
+    base_url: https://api.kimi.com/coding/v1
+    headers: {User-Agent: "KimiCLI/1.0"}   # coding 端点要求编程 Agent 标识
+    # 注意：此 key 为 Kimi Code 订阅，按订阅额度计费而非按 token，
+    # 成本日志中 architect 行的金额为估算值，仅供数量级参考
+    api_key_env: KIMI_API_KEY
+    price:                   # TODO: 按 platform.kimi.com 当前价格填写
+      input_hit: 4.0
+      input_miss: 4.0
+      output: 16.0
+    max_tokens: 8192
+
+  engineer:                  # 高频执行：读写文件 / 跑命令 / 迭代修复
+    provider: deepseek
+    model: deepseek-chat     # 当前指向 V4-Flash 正式版；可在官方文档确认
+    base_url: https://api.deepseek.com
+    api_key_env: DEEPSEEK_API_KEY
+    price:                   # DeepSeek-V4-Flash 正式版（2026-07-31 公测价）
+      input_hit: 0.2         # 缓存命中
+      input_miss: 1.0        # 缓存未命中
+      output: 2.0
+    max_tokens: 8192
+
+# 失败升级策略：工程师连续失败 N 轮后，把该子任务升级给架构师亲自处理
+escalation:
+  max_engineer_rounds_per_subtask: 12   # 工程师单个子任务的 ReAct 轮数上限
+  max_verify_failures: 2                # 验证连续失败几次后升级
+
+# 工程师的工具权限（约束：故障安全默认值，只开放工作目录）
+engineer_tools:
+  allow_run_command: true
+  command_timeout_sec: 60
+  # run_command 命令黑名单（正则），防止不可逆操作
+  command_deny_patterns:
+    - "rm\\s+-rf"
+    - "del\\s+/[fsq]"
+    - "format\\s"
+    - "git\\s+push"
+
+# 成本与日志
+logging:
+  dir: runs                # 每次运行一个子目录：cost.jsonl / handoffs/ / artifacts/
+  status_bar: true         # 用纯代码维护的 <agent_status>（书2.6节：绝不让LLM做统计）

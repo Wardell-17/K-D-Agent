@@ -1,0 +1,35 @@
+# ── 永不进仓库 ──────────────────────────────
+# 依赖（npm install 可重建，几百 MB）
+npm-global/
+node_modules/
+
+# 运行产物与日志（含工作内容与隐私）
+dsh-home/sessions/
+dsh-home/attachments/
+dsh-home/storages/
+dsh-home/.anonymous-user-id
+architect-engineer/runs/
+harness-test/
+harness-test2/
+compare/harness-run/
+*.log
+
+# 测试残留
+test-red.png
+test-dsh-web.ps1
+test-preset-api.ps1
+test-preset-api2.ps1
+test-k3-vision.ps1
+report.txt
+count_md_lines.ps1
+hello.txt
+feasibility.md
+outline.md
+
+# 书仓库（别人的开源项目，本地克隆的，不属于我们的仓库）
+ai-agent-book/
+
+# 系统残留
+__pycache__/
+*.pyc
+Thumbs.db
