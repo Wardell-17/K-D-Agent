@@ -109,6 +109,18 @@ python D:\agent-project\compare\analyze_session.py <会话目录>  :: 指定某�
 
 **前提**：两个 API key 已用 `setx` 永久存为系统变量 `KIMI_API_KEY` / `DEEPSEEK_API_KEY`（Kimi key 是 Kimi Code 订阅 key，只能走 `api.kimi.com/coding/v1` 端点，模型 ID 是 `k3`）。
 
+### 6.1 dsh 版本管理与升级流程
+
+所有启动脚本里 dsh 版本号**钉死在 `$DSH_VERSION`**（当前 `0.1.0-rc.6`），不用 `npx -y` 拉最新版。原因：本项目 patch 依赖 Harness 内部插件 ID 和配置结构（`llm-pi-ai` / `agent-default-model` / `tool-subagent`），rc 阶段这些接口不稳定，静默升级会无征兆地坏（2026-08-17 的 403 事件即为例证：信任栅栏行为在 rc.5→rc.6 间变更）。
+
+**升级步骤**：
+1. 看官方 releases（github.com/deepseek-ai/deepseek-harness），确认新版本有你需要的功能/修复，没有就不升
+2. 改脚本里的 `$DSH_VERSION`（三个脚本一起改：`run-dsh-web.ps1` / `run-dsh-kimi.ps1` / `run-dsh-test2.ps1`）
+3. 验证三连：设置页能打开（无 403）→ 发一条测试任务 → 确认 K3 架构师 + DeepSeek 工程师都在账本里出现
+4. 验证通过 → 提交 git；不通过 → 改回旧版本号立即恢复，把问题记进 `compare/实验记录`
+
+**已知坑**：Web 版有浏览器信任栅栏，特权 API（settings.* 等）仅 loopback 可访问；若浏览器/扩展剥离了 Origin 头的端口号会被误判跨站返回 403——用 InPrivate 窗口或换浏览器排查（详见 compare 实验记录）。
+
 ## 7. 已知边界与待办
 
 - **多模态**：K3 图片输入已在 Harness 声明（`input: [text, image]`）并单独验证端点可读图，但完整含图任务尚未复验
