@@ -526,6 +526,26 @@ class Orchestrator:
         print(f"\n--- 子任务 {packet.task_id}: {packet.goal[:60]}")
         return self._finish([self._execute_packet(packet, card)])
 
+    def run_cards(self, cards_dir: Path) -> dict:
+        """--cards 模式（PM 卡盒）：读入目录下全部任务卡，按依赖关系批量并行调度。"""
+        cards_dir = Path(cards_dir)
+        files = sorted(cards_dir.glob("*.md"))
+        if not files:
+            raise RuntimeError(f"卡盒目录里没有 .md 任务卡: {cards_dir}")
+        packets: dict[str, tuple[HandoffPacket, TaskCard]] = {}
+        for f in files:
+            packet, card = load_card(f)
+            if packet.task_id in packets:
+                raise RuntimeError(f"任务卡 id 重复: {packet.task_id}（{f}）")
+            card.notes.append(f"由 --cards 模式载入，来源: {f}")
+            card.save(self.tasks_dir)
+            self.cards[packet.task_id] = card
+            packets[packet.task_id] = (packet, card)
+            print(f"[card] {packet.task_id}: {packet.goal[:60]}"
+                  + (f"（依赖: {', '.join(packet.depends_on)}）" if packet.depends_on else ""))
+        print(f"[pm] 卡盒共 {len(packets)} 张卡，开始调度")
+        return self._finish(self._schedule(packets))
+
     def _execute_packet(self, packet: HandoffPacket, card: TaskCard) -> dict:
         """单张卡的执行循环：工程师执行 → 验证器取证 → 架构师验收 → 通过/返工/升级。"""
         failures = 0
@@ -584,11 +604,16 @@ class Orchestrator:
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print('用法: python orchestrator.py "你的任务描述"')
-        print('      python orchestrator.py --card <任务卡.md>')
+        print('      python orchestrator.py --card  <任务卡.md>')
+        print('      python orchestrator.py --cards <卡盒目录>')
         sys.exit(1)
     if sys.argv[1] == "--card":
         if len(sys.argv) < 3:
             print("缺少任务卡路径"); sys.exit(1)
         Orchestrator(f"--card {sys.argv[2]}").run_card(Path(sys.argv[2]))
+    elif sys.argv[1] == "--cards":
+        if len(sys.argv) < 3:
+            print("缺少卡盒目录"); sys.exit(1)
+        Orchestrator(f"--cards {sys.argv[2]}").run_cards(Path(sys.argv[2]))
     else:
         Orchestrator(sys.argv[1]).run()
