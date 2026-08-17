@@ -1,1 +1,1 @@
-写一个演示项目：1) gen_sum.py 计算 1 到 100 的和写入 sum.txt；2) gen_year.py 把当前年份写入 year.txt；3) merge.py 读取 sum.txt 和 year.txt，合并成一行写入 final.txt。三个脚本都必须能跑通，merge 依赖前两个的产物。
+做一个纯静态的管理后台仪表盘页面：左侧边栏导航、顶部导航栏、中间的图表区（用纯 CSS 画的柱状图即可）和数据表格区，最终组装成一个 index.html 可以直接用浏览器打开。不引入任何外部框架或 CDN，全部内联 CSS。
