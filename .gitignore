@@ -33,3 +33,4 @@ ai-agent-book/
 __pycache__/
 *.pyc
 Thumbs.db
+api.txt
