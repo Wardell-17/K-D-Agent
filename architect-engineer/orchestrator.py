@@ -452,7 +452,7 @@ class Orchestrator:
         (self.run_dir / "handoffs" / name).write_text(
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def run(self) -> dict:
+    def run(self, plan_only: bool = False) -> dict:
         print(f"[run] 目录: {self.run_dir}")
         # 1. 架构师拆任务
         plan = ask_json(self.architect, ARCHITECT_PLAN_SYS, f"用户任务：{self.task}")
@@ -478,6 +478,14 @@ class Orchestrator:
             print(f"\n--- 子任务 {packet.task_id}: {packet.goal[:60]}"
                   + (f"（依赖: {', '.join(packet.depends_on)}）" if packet.depends_on else ""))
             print(f"[card] {self.tasks_dir / ('card-' + packet.task_id + '.md')}")
+        if plan_only:
+            # 审批门（plan-approve gate）：拆卡落盘后即停，人审卡/改卡后再用 --cards 放行
+            print(f"\n[plan-only] 已生成 {len(packets)} 张任务卡，未执行。")
+            print(f"[plan-only] 请审阅/修改: {self.tasks_dir}")
+            print(f"[plan-only] 确认无误后放行: python orchestrator.py --cards \"{self.tasks_dir}\"")
+            return {"task": self.task, "plan_only": True,
+                    "cards": [str(self.tasks_dir / f"card-{tid}.md") for tid in packets],
+                    "run_dir": str(self.run_dir)}
         return self._finish(self._schedule(packets))
 
     def _schedule(self, packets: dict[str, tuple[HandoffPacket, TaskCard]]) -> list:
@@ -617,6 +625,7 @@ class Orchestrator:
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print('用法: python orchestrator.py "你的任务描述"')
+        print('      python orchestrator.py --plan-only "任务"   （只拆卡不执行，审卡后再放行）')
         print('      python orchestrator.py --card  <任务卡.md>')
         print('      python orchestrator.py --cards <卡盒目录>')
         sys.exit(1)
@@ -628,5 +637,9 @@ if __name__ == "__main__":
         if len(sys.argv) < 3:
             print("缺少卡盒目录"); sys.exit(1)
         Orchestrator(f"--cards {sys.argv[2]}").run_cards(Path(sys.argv[2]))
+    elif sys.argv[1] == "--plan-only":
+        if len(sys.argv) < 3:
+            print("缺少任务描述"); sys.exit(1)
+        Orchestrator(sys.argv[2]).run(plan_only=True)
     else:
         Orchestrator(sys.argv[1]).run()
