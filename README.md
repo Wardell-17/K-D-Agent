@@ -84,7 +84,7 @@ LLM 的自汇报不可信——它说"完成了"可能是幻觉、可能半途�
 
 | 文件 | 作用 |
 |---|---|
-| `architect-engineer/orchestrator.py` | MVP 编排器：规划→派工→验收→返工循环 + 成本日志 |
+| `architect-engineer/orchestrator.py` | MVP 编排器：任务卡驱动（runs/\<ts\>/tasks/*.md）+ 规划→派工→验收→返工循环 + 成本日志 |
 | `architect-engineer/config.yaml` | 模型端点、单价表、升级策略、工程师工具权限（黑名单命令） |
 | `harness-patches/kimi-provider.yml` | Harness patch：声明 Kimi provider（含图片输入）、默认模型指向 K3、headless 模式的人格与子代理路由 |
 | `dsh-home/.agent-presets/architect-engineer/` | Web 模式自定义预设：架构师人格 + 子代理绑定 deepseek-v4-flash + 工程师人格 |

@@ -136,6 +136,60 @@ class HandoffPacket:
 
 
 # ---------------------------------------------------------------------------
+# 任务卡 v0.1（卡片驱动：Markdown + YAML frontmatter，状态由代码维护流转）
+# 卡片是跨角色的持久化共享状态：架构师建卡 → 工程师执行 → 编排器记账/验收 → 状态回写。
+# ---------------------------------------------------------------------------
+@dataclass
+class TaskCard:
+    task_id: str
+    title: str
+    goal: str
+    acceptance: list[str]
+    confirmed_facts: list[str] = field(default_factory=list)
+    artifact_refs: list[str] = field(default_factory=list)
+    status: str = "todo"          # todo / doing / done / rework / escalated
+    owner: str = "architect"
+    created: str = ""
+    updated: str = ""
+    report: str = ""              # 结构化回报（工程师 finish 后由编排器填入）
+    notes: list[str] = field(default_factory=list)  # 返工指令等追加记录
+
+    FRONT_KEYS = ("id", "title", "status", "owner", "created", "updated")
+
+    def render(self) -> str:
+        def esc(s: str) -> str:
+            return s.replace('"', "'").replace("\n", " ")
+        fm = [f'id: "{esc(self.task_id)}"', f'title: "{esc(self.title)}"',
+              f'status: "{self.status}"', f'owner: "{self.owner}"',
+              f'created: "{self.created}"', f'updated: "{self.updated}"']
+        acc = "\n".join(f"- {a}" for a in self.acceptance) or "- （无）"
+        facts = "\n".join(f"- {f}" for f in self.confirmed_facts) or "- （无）"
+        refs = "\n".join(f"- {r}" for r in self.artifact_refs) or "- （无）"
+        notes = "\n".join(f"- {n}" for n in self.notes) or "- （无）"
+        return ("---\n" + "\n".join(fm) + "\n---\n\n"
+                f"# 任务卡 {self.task_id}：{self.title}\n\n"
+                f"## 目标\n\n{self.goal}\n\n"
+                f"## 验收标准\n\n{acc}\n\n"
+                f"## 已确认事实与约束\n\n{facts}\n\n"
+                f"## 产物引用\n\n{refs}\n\n"
+                f"## 结构化回报\n\n{self.report or '（待工程师完成后填写）'}\n\n"
+                f"## 返工与备注\n\n{notes}\n")
+
+    def save(self, tasks_dir: Path) -> Path:
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        p = tasks_dir / f"card-{self.task_id}.md"
+        p.write_text(self.render(), encoding="utf-8")
+        return p
+
+    def touch(self, status: str | None = None, owner: str | None = None):
+        if status:
+            self.status = status
+        if owner:
+            self.owner = owner
+        self.updated = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+# ---------------------------------------------------------------------------
 # 工程师工具集（约束：故障安全默认值——只能在工作目录内读写，命令有黑名单）
 # ---------------------------------------------------------------------------
 class Toolbox:
@@ -221,7 +275,8 @@ artifact_refs（相关文件路径，需自行读取）。
 1. 先读 artifact_refs 里的相关文件，再动手；
 2. 每完成一步用 run_command 实际验证（跑测试/脚本），不要凭感觉声明完成；
 3. 遇到命令失败，读错误输出、修复、重试；同一错误连续两次则换方案；
-4. 完成后调用 finish 提交总结——finish 是"我做完了一步"，最终验收由架构师基于
+4. 完成后调用 finish 提交结构化总结，必须包含四块：改动文件清单 / 实际运行的命令 /
+   命令输出摘要 / 已知风险。finish 是"我做完了一步"，最终验收由架构师基于
    实际执行结果判定，不由你宣布。"""
 
 
@@ -317,6 +372,9 @@ class Orchestrator:
         self.workdir = self.run_dir / "workspace"   # 产物区（工程师的工作目录）
         self.workdir.mkdir(parents=True, exist_ok=True)
         (self.run_dir / "handoffs").mkdir()
+        self.tasks_dir = self.run_dir / "tasks"     # 任务卡目录（卡片驱动）
+        self.tasks_dir.mkdir()
+        self.cards: dict[str, TaskCard] = {}
         self.tracker = CostTracker(self.run_dir / "cost.jsonl")
         self.architect = LLM("architect", self.tracker)
         self.engineer = LLM("engineer", self.tracker)
@@ -336,12 +394,29 @@ class Orchestrator:
         results = []
         for st in subtasks:
             packet = HandoffPacket(**{k: v for k, v in st.items() if k in HandoffPacket.__dataclass_fields__})
+            # 落任务卡：架构师拆出子任务即建卡（todo）
+            card = TaskCard(task_id=packet.task_id, title=packet.goal[:40],
+                            goal=packet.goal, acceptance=packet.acceptance,
+                            confirmed_facts=list(packet.confirmed_facts),
+                            artifact_refs=list(packet.artifact_refs),
+                            created=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                            updated=time.strftime("%Y-%m-%dT%H:%M:%S"))
+            card.save(self.tasks_dir)
+            self.cards[packet.task_id] = card
             print(f"\n--- 子任务 {packet.task_id}: {packet.goal[:60]}")
+            print(f"[card] {self.tasks_dir / ('card-' + packet.task_id + '.md')}")
             failures = 0
             while True:
-                # 2. 工程师执行
+                # 2. 工程师执行（卡片状态置 doing）
+                card.touch(status="doing", owner="engineer")
+                card.save(self.tasks_dir)
                 eng = run_engineer(packet, self.workdir, self.engineer)
                 print(f"[engineer] {eng['status']}: {eng['summary'][:80]}")
+                # 结构化回报写入卡片
+                card.report = (f"状态: {eng['status']}\n\n{eng['summary']}\n\n"
+                               f"工具调用: {json.dumps(eng.get('tool_calls', {}), ensure_ascii=False)}")
+                card.touch(owner="architect")
+                card.save(self.tasks_dir)
                 # 3. 验证器跑真实检查（产出新信息——执行证据）
                 ver = verify(packet, self.workdir)
                 # 4. 架构师基于证据验收（审核者读独立证据，而非只听提议者自述）
@@ -352,20 +427,30 @@ class Orchestrator:
                                  {"engineer": eng, "verification": ver, "review": review})
                 if review.get("verdict") == "pass" and ver["all_passed"]:
                     print(f"[architect] ✓ 通过: {review.get('reason', '')[:80]}")
+                    card.touch(status="done")
+                    card.notes.append("验收通过: " + review.get("reason", ""))
+                    card.save(self.tasks_dir)
                     results.append({"task_id": packet.task_id, "review": review})
                     break
                 failures += 1
                 print(f"[architect] ✗ 返工({failures}): {review.get('fix_instructions', '')[:80]}")
                 if failures > CONFIG["escalation"]["max_verify_failures"]:
                     # 升级策略：连续失败则记录并交还人工（人工干预，书 1.2.6.2）
+                    card.touch(status="escalated", owner="human")
+                    card.notes.append("连续返工超限，升级人工: " + review.get("fix_instructions", ""))
+                    card.save(self.tasks_dir)
                     results.append({"task_id": packet.task_id, "verdict": "escalated",
                                     "reason": "连续返工超限，需人工介入", "last_review": review})
                     break
-                # 返工：把修复指令写入移交包（已确认事实追加，预算收紧）
+                # 返工：修复指令写入移交包 + 追加进卡片备注，预算收紧
+                card.touch(status="rework")
+                card.notes.append(f"返工({failures}): " + review.get("fix_instructions", ""))
+                card.save(self.tasks_dir)
                 packet.confirmed_facts.append("上次返工原因: " + review.get("fix_instructions", ""))
                 packet.remaining_budget = max(packet.remaining_budget // 2, 4)
 
         report = {"task": self.task, "results": results,
+                  "cards": [str(self.tasks_dir / f"card-{c.task_id}.md") for c in self.cards.values()],
                   "cost": self.tracker.records, "run_dir": str(self.run_dir)}
         (self.run_dir / "report.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
