@@ -26,10 +26,12 @@ models:
     model: deepseek-chat     # 当前指向 V4-Flash 正式版；可在官方文档确认
     base_url: https://api.deepseek.com
     api_key_env: DEEPSEEK_API_KEY
-    price:                   # DeepSeek-V4-Flash 正式版（2026-07-31 公测价）
-      input_hit: 0.2         # 缓存命中
-      input_miss: 1.0        # 缓存未命中
-      output: 2.0
+    price:                   # DeepSeek-V4-Flash 官方价（api-docs.deepseek.com，2026-08-17 起）
+      input_hit: 0.10        # 缓存命中·高峰（北京 9-12/14-18 点）；空闲时段 0.05
+      input_miss: 3.0        # 缓存未命中·高峰；空闲时段 1.5
+      output: 9.0            # 输出·高峰；空闲时段 4.5
+      # 注：此处取高峰价（保守上限）；精确峰谷计价见 compare/analyze_session.py
+      # 2026-08-17 前旧价为 0.2/1.0/2.0，历史运行记录的成本按旧价理解
     max_tokens: 8192
 
 # 失败升级策略：工程师连续失败 N 轮后，把该子任务升级给架构师亲自处理
