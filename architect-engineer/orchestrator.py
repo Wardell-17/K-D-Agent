@@ -23,7 +23,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -43,6 +45,7 @@ class CostTracker:
     def __init__(self, log_path: Path):
         self.log_path = log_path
         self.records: list[dict] = []
+        self._lock = threading.Lock()   # 并行模式下多线程同时记账
 
     def record(self, role: str, model_cfg: dict, usage) -> dict:
         # OpenAI 兼容接口的 usage；DeepSeek 会额外返回 prompt_cache_hit_tokens
@@ -59,9 +62,10 @@ class CostTracker:
             "prompt_tokens": prompt, "cache_hit": hit,
             "completion_tokens": completion, "cost_cny": round(cost, 6),
         }
-        self.records.append(rec)
-        with self.log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        with self._lock:
+            self.records.append(rec)
+            with self.log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         return rec
 
     def summary(self) -> str:
@@ -133,6 +137,7 @@ class HandoffPacket:
     artifact_refs: list[str] = field(default_factory=list)     # 相关文件路径（引用而非内容）
     remaining_budget: int = 12       # 剩余 ReAct 轮数预算（budget-aware, 书10.2）
     visited: list[str] = field(default_factory=list)           # 循环检测
+    depends_on: list[str] = field(default_factory=list)        # 前置任务卡 id（并行调度用）
 
 
 # ---------------------------------------------------------------------------
@@ -151,17 +156,20 @@ class TaskCard:
     owner: str = "architect"
     created: str = ""
     updated: str = ""
+    depends_on: list[str] = field(default_factory=list)  # 前置卡 id，全部 done 才可调度
     report: str = ""              # 结构化回报（工程师 finish 后由编排器填入）
     notes: list[str] = field(default_factory=list)  # 返工指令等追加记录
 
-    FRONT_KEYS = ("id", "title", "status", "owner", "created", "updated")
+    FRONT_KEYS = ("id", "title", "status", "owner", "created", "updated", "depends_on")
 
     def render(self) -> str:
         def esc(s: str) -> str:
             return s.replace('"', "'").replace("\n", " ")
+        deps = "[" + ", ".join(f'"{esc(d)}"' for d in self.depends_on) + "]"
         fm = [f'id: "{esc(self.task_id)}"', f'title: "{esc(self.title)}"',
               f'status: "{self.status}"', f'owner: "{self.owner}"',
-              f'created: "{self.created}"', f'updated: "{self.updated}"']
+              f'created: "{self.created}"', f'updated: "{self.updated}"',
+              f'depends_on: {deps}']
         acc = "\n".join(f"- {a}" for a in self.acceptance) or "- （无）"
         facts = "\n".join(f"- {f}" for f in self.confirmed_facts) or "- （无）"
         refs = "\n".join(f"- {r}" for r in self.artifact_refs) or "- （无）"
@@ -212,12 +220,14 @@ def load_card(path: Path) -> tuple[HandoffPacket, TaskCard]:
     goal = _section(body, "目标")
     if not goal:
         raise ValueError(f"任务卡缺少 ## 目标 一节: {path}")
+    deps = [str(d) for d in (fm.get("depends_on") or [])]
     packet = HandoffPacket(
         task_id=str(fm.get("id", Path(path).stem.replace("card-", ""))),
         goal=goal,
         acceptance=_bullets(body, "验收标准"),
         confirmed_facts=_bullets(body, "已确认事实与约束"),
         artifact_refs=_bullets(body, "产物引用"),
+        depends_on=deps,
     )
     card = TaskCard(task_id=packet.task_id, title=str(fm.get("title", goal[:40])),
                     goal=goal, acceptance=packet.acceptance,
@@ -227,6 +237,7 @@ def load_card(path: Path) -> tuple[HandoffPacket, TaskCard]:
                     owner=str(fm.get("owner", "human")),
                     created=str(fm.get("created", "")),
                     updated=str(fm.get("updated", "")),
+                    depends_on=deps,
                     report=_section(body, "结构化回报"),
                     notes=_bullets(body, "返工与备注"))
     return packet, card
@@ -396,8 +407,10 @@ ARCHITECT_PLAN_SYS = """你是首席架构师。把用户的任务拆解为 1-5 
 只输出 JSON：{"subtasks": [{"task_id": "t1", "goal": "...",
 "acceptance": ["以!开头的是可执行验收命令，如 !python test.py；其余为文字判据"],
 "confirmed_facts": ["执行者必须遵守的约束与已知事实"],
-"artifact_refs": ["相关文件路径"], "remaining_budget": 12}]}
+"artifact_refs": ["相关文件路径"], "remaining_budget": 12,
+"depends_on": ["可选：本任务依赖的前置 task_id，无依赖则省略或给空数组"]}]}
 原则：每个子任务必须有客观验收标准；事实与约束写全，执行者看不到本次对话。
+相互独立的子任务不要加依赖（系统会并行执行）；只有真正需要前序产物时才填 depends_on。
 重要：运行环境是 Windows（cmd.exe，无 Unix 命令）。验收命令只能用 python、
 Windows 原生命令（dir/type/findstr）或 python -c 一行流；严禁 test/grep/cat/ls 等 Unix 命令。"""
 
@@ -435,6 +448,7 @@ class Orchestrator:
         print(f"[architect] 拆解为 {len(subtasks)} 个子任务")
 
         results = []
+        packets: dict[str, tuple[HandoffPacket, TaskCard]] = {}
         for st in subtasks:
             packet = HandoffPacket(**{k: v for k, v in st.items() if k in HandoffPacket.__dataclass_fields__})
             # 落任务卡：架构师拆出子任务即建卡（todo）
@@ -443,13 +457,64 @@ class Orchestrator:
                             confirmed_facts=list(packet.confirmed_facts),
                             artifact_refs=list(packet.artifact_refs),
                             created=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                            updated=time.strftime("%Y-%m-%dT%H:%M:%S"))
+                            updated=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                            depends_on=list(packet.depends_on))
             card.save(self.tasks_dir)
             self.cards[packet.task_id] = card
-            print(f"\n--- 子任务 {packet.task_id}: {packet.goal[:60]}")
+            packets[packet.task_id] = (packet, card)
+            print(f"\n--- 子任务 {packet.task_id}: {packet.goal[:60]}"
+                  + (f"（依赖: {', '.join(packet.depends_on)}）" if packet.depends_on else ""))
             print(f"[card] {self.tasks_dir / ('card-' + packet.task_id + '.md')}")
-            results.append(self._execute_packet(packet, card))
-        return self._finish(results)
+        return self._finish(self._schedule(packets))
+
+    def _schedule(self, packets: dict[str, tuple[HandoffPacket, TaskCard]]) -> list:
+        """依赖感知并行调度器：depends_on 全部 done 的卡立即派发，线程池并行执行。
+        前置卡失败/升级 → 依赖它的卡冻结为 escalated（不浪费 token 跑必败任务）。"""
+        max_workers = CONFIG.get("parallel", {}).get("max_workers", 3)
+        results: list[dict] = []
+        done: set[str] = set()
+        failed: set[str] = set()
+        pending = dict(packets)
+        futures: dict = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            while pending or futures:
+                # 1. 派发所有依赖已就绪的卡
+                for tid in [t for t, (p, c) in pending.items()
+                            if all(d in done for d in p.depends_on)]:
+                    if any(d in failed for d in pending[tid][0].depends_on):
+                        continue  # 有失败依赖的留给下面冻结逻辑
+                    packet, card = pending.pop(tid)
+                    futures[pool.submit(self._execute_packet, packet, card)] = tid
+                # 2. 冻结：有依赖失败的卡不执行，直接升级人工
+                for tid in [t for t, (p, c) in pending.items()
+                            if any(d in failed for d in p.depends_on)]:
+                    packet, card = pending.pop(tid)
+                    card.touch(status="escalated", owner="human")
+                    card.notes.append("前置任务失败/升级，本卡冻结: "
+                                      + ", ".join(d for d in packet.depends_on if d in failed))
+                    card.save(self.tasks_dir)
+                    results.append({"task_id": tid, "verdict": "escalated",
+                                    "reason": "前置任务失败，依赖链冻结"})
+                    failed.add(tid)
+                if not futures:
+                    if pending:  # 依赖成环或引用了不存在的卡
+                        for tid, (packet, card) in pending.items():
+                            card.touch(status="escalated", owner="human")
+                            card.notes.append("依赖无法满足（成环或缺失）: "
+                                              + ", ".join(packet.depends_on))
+                            card.save(self.tasks_dir)
+                            results.append({"task_id": tid, "verdict": "escalated",
+                                            "reason": "依赖成环或缺失"})
+                        pending.clear()
+                    break
+                # 3. 等任意一张卡完成，再重新评估可派发集合
+                finished, _ = wait(futures, return_when=FIRST_COMPLETED)
+                for fut in finished:
+                    tid = futures.pop(fut)
+                    res = fut.result()
+                    results.append(res)
+                    (failed if res.get("verdict") == "escalated" else done).add(tid)
+        return results
 
     def run_card(self, card_path: Path) -> dict:
         """--card 模式：跳过架构师拆任务，直接执行一张手写/外来的任务卡。"""

@@ -1,1 +1,1 @@
-写一个脚本统计本目录所有 md 文件的总行数并输出 report.txt，要求脚本能跑通
+写一个演示项目：1) gen_sum.py 计算 1 到 100 的和写入 sum.txt；2) gen_year.py 把当前年份写入 year.txt；3) merge.py 读取 sum.txt 和 year.txt，合并成一行写入 final.txt。三个脚本都必须能跑通，merge 依赖前两个的产物。
