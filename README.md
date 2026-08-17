@@ -89,22 +89,18 @@ LLM 的自汇报不可信——它说"完成了"可能是幻觉、可能半途�
 | `harness-patches/kimi-provider.yml` | Harness patch：声明 Kimi provider（含图片输入）、默认模型指向 K3、headless 模式的人格与子代理路由 |
 | `dsh-home/.agent-presets/architect-engineer/` | Web 模式自定义预设：架构师人格 + 子代理绑定 deepseek-v4-flash + 工程师人格 |
 | `compare/analyze_session.py` | 会话账本分析：解码 zstd 帧日志，按角色统计模型/调用/tokens/成本 |
-| `run-dsh-web.ps1` | 一键启动 Web 版（自动从系统变量读两个 key） |
+| `run-dsh-web.ps1` | 一键启动 Web 版（自动从系统变量读两个 key；路径自适应，公司/家里通用） |
 | `决策框架.md` | 判据文档：什么场景用哪条路线、什么算"真懂了"、待补实验清单 |
-| `compare/实验记录-001.md` `002.md` | 对比实验与链路修复的完整记录（含踩坑清单） |
+| `compare/实验记录-001.md` `002.md` `003.md` | 对比实验、链路修复、迁移排查的完整记录（含踩坑清单） |
 
 ## 6. 如何使用（速查）
 
-**日常用（Web 版）**：
-```
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\agent-project\run-dsh-web.ps1
-```
-浏览器打开 `http://127.0.0.1:3080`，新开会话（预设自动为"架构师+工程师"），大白话派任务。
+**日常用（Web 版）**：运行项目根目录下的 `run-dsh-web.ps1`（PowerShell），服务起来后会自动打开浏览器 `http://127.0.0.1:3080`，新开会话（预设自动为"架构师+工程师"），大白话派任务。
 
 **事后算账**：
 ```
-python D:\agent-project\compare\analyze_session.py        :: 最近一次运行
-python D:\agent-project\compare\analyze_session.py <会话目录>  :: 指定某次
+python compare\analyze_session.py        :: 最近一次运行
+python compare\analyze_session.py <会话目录>  :: 指定某次
 ```
 
 **前提**：两个 API key 已用 `setx` 永久存为系统变量 `KIMI_API_KEY` / `DEEPSEEK_API_KEY`（Kimi key 是 Kimi Code 订阅 key，只能走 `api.kimi.com/coding/v1` 端点，模型 ID 是 `k3`）。
@@ -138,4 +134,4 @@ python D:\agent-project\compare\analyze_session.py <会话目录>  :: 指定某�
 
 ---
 
-*版本 v1 ｜ 2026-08-14 ｜ 维护方式：每次实验/修复后更新对应章节*
+*版本 v1.1 ｜ 2026-08-17 ｜ 维护方式：每次实验/修复后更新对应章节*

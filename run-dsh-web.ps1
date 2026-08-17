@@ -1,3 +1,4 @@
+﻿# 启动双模型 Agent Web 版（路径自适应：脚本所在目录即项目根，公司/家里通用）
 $env:DEEPSEEK_API_KEY=[Environment]::GetEnvironmentVariable('DEEPSEEK_API_KEY','User')
 $env:KIMI_API_KEY=[Environment]::GetEnvironmentVariable('KIMI_API_KEY','User')
 
@@ -6,11 +7,20 @@ if (-not $env:KIMI_API_KEY -and $env:MOONSHOT_API_KEY) {
     $env:KIMI_API_KEY = $env:MOONSHOT_API_KEY
 }
 
-$env:DSH_HOME='E:\DSH\K-D-Agent\dsh-home'
-Set-Location 'E:\DSH\K-D-Agent'
+$ROOT = $PSScriptRoot
+$env:DSH_HOME = Join-Path $ROOT 'dsh-home'
+Set-Location $ROOT
 
 # dsh 版本钉死：升级时改这里，验证通过后再提交（流程见 README 第 6.1 节）
 $DSH_VERSION = '0.1.0-rc.6'
+
+# 优先用项目内已装的 dsh（离线也能跑）；没有则 npx 拉指定版本
+$localDsh = Join-Path $ROOT 'npm-global\dsh.cmd'
+if (Test-Path $localDsh) {
+    $dshExe = $localDsh; $dshArgs = @()
+} else {
+    $dshExe = 'npx'; $dshArgs = @('-y', "@deepseek-ai/dsh@$DSH_VERSION")
+}
 
 # 后台监听端口，服务起来后自动打开浏览器
 Start-Job -ScriptBlock {
@@ -24,4 +34,4 @@ Start-Job -ScriptBlock {
     if ($ok) { Start-Process 'http://127.0.0.1:3080' }
 } | Out-Null
 
-npx -y "@deepseek-ai/dsh@$DSH_VERSION" web --patch 'E:\DSH\K-D-Agent\harness-patches\kimi-provider.yml' 2>&1
+& $dshExe @dshArgs web --patch (Join-Path $ROOT 'harness-patches\kimi-provider.yml') 2>&1
