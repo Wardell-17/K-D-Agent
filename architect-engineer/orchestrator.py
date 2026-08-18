@@ -25,6 +25,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -244,6 +246,66 @@ def load_card(path: Path) -> tuple[HandoffPacket, TaskCard]:
 
 
 # ---------------------------------------------------------------------------
+# 联网检索（可插拔后端：Tavily 主力 → DuckDuckGo 免费降级；直连失败自动走本地代理）
+# 设计约束：返回结构化"标题+URL+摘要"，证据优先官方域名；调用计入工具计数。
+# ---------------------------------------------------------------------------
+def _http_json(url: str, payload: dict | None, timeout: int = 20) -> tuple[int, str]:
+    """最小 HTTP 封装：先直连，失败后走本地代理（Clash 7890）。返回 (状态码, 响应体)。"""
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(url, data=data,
+                                 headers={"Content-Type": "application/json",
+                                          "User-Agent": "Mozilla/5.0"})
+    for proxy in (None, "http://127.0.0.1:7890"):
+        try:
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({"http": proxy, "https": proxy}) if proxy
+                else urllib.request.ProxyHandler({}))
+            with opener.open(req, timeout=timeout) as r:
+                return r.status, r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8", "replace")[:2000]
+        except Exception:
+            continue
+    return -1, "网络不可达（直连与代理均失败）"
+
+
+def web_search(query: str, max_results: int = 5) -> str:
+    """Tavily 优先；额度耗尽/失败自动降级 DuckDuckGo。输出统一为编号列表。"""
+    key = os.environ.get("TAVILY_API_KEY")
+    if key:
+        code, body = _http_json("https://api.tavily.com/search", {
+            "api_key": key, "query": query, "max_results": max_results,
+            "search_depth": "basic", "include_answer": False})
+        if code == 200:
+            try:
+                results = json.loads(body).get("results", [])
+                if results:
+                    lines = [f"[Tavily] 查询: {query}"]
+                    for i, r in enumerate(results, 1):
+                        lines.append(f"{i}. {r.get('title', '')}\n   {r.get('url', '')}\n"
+                                     f"   {(r.get('content') or '')[:300]}")
+                    return "\n".join(lines)
+            except json.JSONDecodeError:
+                pass
+        elif code in (429, 432):
+            pass  # 额度耗尽 → 降级
+        else:
+            return f"[Tavily] HTTP {code}: {body[:300]}"
+    # 降级：DuckDuckGo HTML（免费无 key）
+    q = urllib.parse.quote(query)
+    code, body = _http_json(f"https://html.duckduckgo.com/html/?q={q}", None)
+    if code == 200:
+        links = re.findall(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', body)
+        if links:
+            lines = [f"[DuckDuckGo 降级] 查询: {query}"]
+            for i, (url, title) in enumerate(links[:max_results], 1):
+                title = re.sub(r"<[^>]+>", "", title).strip()
+                lines.append(f"{i}. {title}\n   {url}")
+            return "\n".join(lines)
+    return f"检索失败：Tavily 与 DuckDuckGo 降级均不可用（HTTP {code}）"
+
+
+# ---------------------------------------------------------------------------
 # 工程师工具集（约束：故障安全默认值——只能在工作目录内读写，命令有黑名单）
 # ---------------------------------------------------------------------------
 class Toolbox:
@@ -254,6 +316,7 @@ class Toolbox:
         self.allow_cmd = ecfg["allow_run_command"]
         self.cmd_timeout = ecfg["command_timeout_sec"]
         self.deny = [re.compile(p) for p in ecfg["command_deny_patterns"]]
+        self.search_history: set[str] = set()   # 查询去重，防烧检索额度
 
     def _safe(self, rel: str) -> Path:
         p = (self.workdir / rel).resolve()
@@ -281,6 +344,11 @@ class Toolbox:
                {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
             fn("list_dir", "列出工作目录（或子目录）下的文件",
                {"path": {"type": "string", "description": "相对路径，默认 ."}}, []),
+            fn("web_search", "联网检索（Tavily 主力，自动降级）。用于查证外部事实/最新资料；"
+               "结果含标题+URL+摘要。纪律：结论必须附来源 URL，优先官方域名，"
+               "同一查询不要重复检索，检索结果及时落盘保存",
+               {"query": {"type": "string"},
+                "max_results": {"type": "integer", "description": "默认 5，最大 10"}}, ["query"]),
             fn("finish", "子任务完成时调用，提交结构化总结（不代表已验收）",
                {"summary": {"type": "string", "description": "做了什么、改了哪些文件、已知风险"}},
                ["summary"]),
@@ -304,6 +372,15 @@ class Toolbox:
             if name == "list_dir":
                 p = self._safe(args.get("path", "."))
                 return "\n".join(sorted(x.name for x in p.iterdir())) or "(空目录)"
+            if name == "web_search":
+                q = str(args.get("query", "")).strip()
+                if not q:
+                    return "错误：query 不能为空"
+                if q in self.search_history:
+                    return "提示：该查询已检索过，结果请查阅之前的返回；避免重复烧额度"
+                self.search_history.add(q)
+                mr = max(1, min(int(args.get("max_results", 5)), 10))
+                return web_search(q, mr)
             if name == "run_command":
                 cmd = args["command"]
                 if any(d.search(cmd) for d in self.deny):
@@ -331,7 +408,10 @@ artifact_refs（相关文件路径，需自行读取）。
 3. 遇到命令失败，读错误输出、修复、重试；同一错误连续两次则换方案；
 4. 只写本任务目标内的文件；其他任务可能并行进行，绝不改动卡片未授权你写的共享文件
    （跨任务成果的组装是"集成卡"的职责，不是你的）；
-5. 完成后调用 finish 提交结构化总结，必须包含四块：改动文件清单 / 实际运行的命令 /
+5. 需要外部事实/最新资料时用 web_search 检索查证，禁止凭训练记忆编造；
+   结论必须附来源 URL（优先官方域名），检索结果及时 write_file 落盘（如 research/ 目录）
+   供下游任务引用；
+6. 完成后调用 finish 提交结构化总结，必须包含四块：改动文件清单 / 实际运行的命令 /
    命令输出摘要 / 已知风险。finish 是"我做完了一步"，最终验收由架构师基于
    实际执行结果判定，不由你宣布。"""
 
