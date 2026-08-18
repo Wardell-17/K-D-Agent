@@ -314,6 +314,7 @@ class Toolbox:
         self.call_counts: dict[str, int] = {}
         ecfg = CONFIG["engineer_tools"]
         self.allow_cmd = ecfg["allow_run_command"]
+        self.allow_search = ecfg.get("allow_web_search", True)
         self.cmd_timeout = ecfg["command_timeout_sec"]
         self.deny = [re.compile(p) for p in ecfg["command_deny_patterns"]]
         self.search_history: set[str] = set()   # 查询去重，防烧检索额度
@@ -344,15 +345,19 @@ class Toolbox:
                {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
             fn("list_dir", "列出工作目录（或子目录）下的文件",
                {"path": {"type": "string", "description": "相对路径，默认 ."}}, []),
-            fn("web_search", "联网检索（Tavily 主力，自动降级）。用于查证外部事实/最新资料；"
-               "结果含标题+URL+摘要。纪律：结论必须附来源 URL，优先官方域名，"
-               "同一查询不要重复检索，检索结果及时落盘保存",
-               {"query": {"type": "string"},
-                "max_results": {"type": "integer", "description": "默认 5，最大 10"}}, ["query"]),
+        ]
+        if self.allow_search:
+            tools.append(
+                fn("web_search", "联网检索（Tavily 主力，自动降级）。用于查证外部事实/最新资料；"
+                   "结果含标题+URL+摘要。纪律：结论必须附来源 URL，优先官方域名，"
+                   "同一查询不要重复检索，检索结果及时落盘保存",
+                   {"query": {"type": "string"},
+                    "max_results": {"type": "integer", "description": "默认 5，最大 10"}},
+                   ["query"]))
+        tools.append(
             fn("finish", "子任务完成时调用，提交结构化总结（不代表已验收）",
                {"summary": {"type": "string", "description": "做了什么、改了哪些文件、已知风险"}},
-               ["summary"]),
-        ]
+               ["summary"]))
         if self.allow_cmd:
             tools.insert(3, fn("run_command",
                                "在工作目录中执行 shell 命令（有超时与黑名单限制），用于运行测试/脚本",
@@ -492,6 +497,9 @@ ARCHITECT_PLAN_SYS = """你是首席架构师。把用户的任务拆解为 1-5 
 "artifact_refs": ["相关文件路径"], "remaining_budget": 12,
 "depends_on": ["可选：本任务依赖的前置 task_id，无依赖则省略或给空数组"]}]}
 原则：每个子任务必须有客观验收标准；事实与约束写全，执行者看不到本次对话。
+信息保真纪律（最高优先级）：goal 必须完整保留用户任务中的全部具体要求——
+专有名词、数字、日期、交付格式、每一条点名的事项，禁止概括性转述导致信息丢失。
+用户说"三条事实：1)X 2)Y 3)Z"，卡里就必须逐字出现 X/Y/Z，不能只写"三条事实"。
 相互独立的子任务不要加依赖（系统会并行执行）；只有真正需要前序产物时才填 depends_on。
 文件隔离纪律（防并行写冲突）：相互并行的子任务必须写各自独立的文件，禁止写同一文件；
 若多个子任务的成果需要汇入同一文件，必须单独拆出一个"集成"子任务（depends_on 各产出卡），
@@ -505,7 +513,8 @@ ARCHITECT_PLAN_SYS = """你是首席架构师。把用户的任务拆解为 1-5 
   必须额外生成第 N+1 张集成卡（depends_on 全部 N 张执行卡）；集成卡职责仅限 import
   与组装，禁止编写业务逻辑。
 重要：运行环境是 Windows（cmd.exe，无 Unix 命令）。验收命令只能用 python、
-Windows 原生命令（dir/type/findstr）或 python -c 一行流；严禁 test/grep/cat/ls 等 Unix 命令。"""
+Windows 原生命令（dir/type）或 python -c 一行流；严禁 test/grep/cat/ls 等 Unix 命令。
+涉及中文内容匹配的验收检查一律用 python（findstr 在 GBK 代码页下匹配 UTF-8 中文必失败）。"""
 
 ARCHITECT_REVIEW_SYS = """你是首席架构师，正在验收工程师的工作。你会看到：
 移交包、工程师自述的总结、以及验证器对验收命令的真实执行结果（证据）。

@@ -42,6 +42,7 @@ escalation:
 # 工程师的工具权限（约束：故障安全默认值，只开放工作目录）
 engineer_tools:
   allow_run_command: true
+  allow_web_search: true      # 实验012·B组：启用检索
   command_timeout_sec: 60
   # run_command 命令黑名单（正则），防止不可逆操作
   command_deny_patterns:
