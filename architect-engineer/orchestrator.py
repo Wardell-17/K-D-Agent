@@ -161,6 +161,7 @@ class TaskCard:
     depends_on: list[str] = field(default_factory=list)  # 前置卡 id，全部 done 才可调度
     report: str = ""              # 结构化回报（工程师 finish 后由编排器填入）
     notes: list[str] = field(default_factory=list)  # 返工指令等追加记录
+    search_backend: str = ""      # 检索后端路由：""=跟随全局配置；可填 auto/tavily/ddg/deepseek
 
     FRONT_KEYS = ("id", "title", "status", "owner", "created", "updated", "depends_on")
 
@@ -172,6 +173,8 @@ class TaskCard:
               f'status: "{self.status}"', f'owner: "{self.owner}"',
               f'created: "{self.created}"', f'updated: "{self.updated}"',
               f'depends_on: {deps}']
+        if self.search_backend:
+            fm.append(f'search_backend: "{esc(self.search_backend)}"')
         acc = "\n".join(f"- {a}" for a in self.acceptance) or "- （无）"
         facts = "\n".join(f"- {f}" for f in self.confirmed_facts) or "- （无）"
         refs = "\n".join(f"- {r}" for r in self.artifact_refs) or "- （无）"
@@ -241,7 +244,8 @@ def load_card(path: Path) -> tuple[HandoffPacket, TaskCard]:
                     updated=str(fm.get("updated", "")),
                     depends_on=deps,
                     report=_section(body, "结构化回报"),
-                    notes=_bullets(body, "返工与备注"))
+                    notes=_bullets(body, "返工与备注"),
+                    search_backend=str(fm.get("search_backend", "") or ""))
     return packet, card
 
 
@@ -269,40 +273,99 @@ def _http_json(url: str, payload: dict | None, timeout: int = 20) -> tuple[int, 
     return -1, "网络不可达（直连与代理均失败）"
 
 
-def web_search(query: str, max_results: int = 5) -> str:
-    """Tavily 优先；额度耗尽/失败自动降级 DuckDuckGo。输出统一为编号列表。"""
+# ── 检索驱动（可插拔 driver，实验 014：后端按任务卡路由，不再绑死单一工具）──
+# 每个 driver 返回 str；返回 None 表示"本驱动不可用/无结果"，由调度策略决定降级。
+# 时效性纪律（实验 013 教训）：驱动只负责取数，"查询词带时间约束"由任务卡/Prompt 层保证。
+
+def _search_tavily(query: str, max_results: int) -> str | None:
+    """Tavily（付费，1000 次/月免费档，成本可审计）。无 key / 额度耗尽 / 无结果 → None。"""
     key = os.environ.get("TAVILY_API_KEY")
-    if key:
-        code, body = _http_json("https://api.tavily.com/search", {
-            "api_key": key, "query": query, "max_results": max_results,
-            "search_depth": "basic", "include_answer": False})
-        if code == 200:
-            try:
-                results = json.loads(body).get("results", [])
-                if results:
-                    lines = [f"[Tavily] 查询: {query}"]
-                    for i, r in enumerate(results, 1):
-                        lines.append(f"{i}. {r.get('title', '')}\n   {r.get('url', '')}\n"
-                                     f"   {(r.get('content') or '')[:300]}")
-                    return "\n".join(lines)
-            except json.JSONDecodeError:
-                pass
-        elif code in (429, 432):
-            pass  # 额度耗尽 → 降级
-        else:
-            return f"[Tavily] HTTP {code}: {body[:300]}"
-    # 降级：DuckDuckGo HTML（免费无 key）
+    if not key:
+        return None
+    code, body = _http_json("https://api.tavily.com/search", {
+        "api_key": key, "query": query, "max_results": max_results,
+        "search_depth": "basic", "include_answer": False})
+    if code == 200:
+        try:
+            results = json.loads(body).get("results", [])
+            if results:
+                lines = [f"[Tavily] 查询: {query}"]
+                for i, r in enumerate(results, 1):
+                    lines.append(f"{i}. {r.get('title', '')}\n   {r.get('url', '')}\n"
+                                 f"   {(r.get('content') or '')[:300]}")
+                return "\n".join(lines)
+        except json.JSONDecodeError:
+            pass
+        return None
+    if code in (429, 432):
+        return None  # 额度耗尽 → 降级
+    return f"[Tavily] HTTP {code}: {body[:300]}"
+
+
+def _search_ddg(query: str, max_results: int) -> str | None:
+    """DuckDuckGo HTML（免费无 key，零成本兜底）。失败/无结果 → None。"""
     q = urllib.parse.quote(query)
     code, body = _http_json(f"https://html.duckduckgo.com/html/?q={q}", None)
     if code == 200:
         links = re.findall(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', body)
         if links:
-            lines = [f"[DuckDuckGo 降级] 查询: {query}"]
+            lines = [f"[DuckDuckGo] 查询: {query}"]
             for i, (url, title) in enumerate(links[:max_results], 1):
                 title = re.sub(r"<[^>]+>", "", title).strip()
                 lines.append(f"{i}. {title}\n   {url}")
             return "\n".join(lines)
-    return f"检索失败：Tavily 与 DuckDuckGo 降级均不可用（HTTP {code}）"
+    return None
+
+
+def _search_deepseek(query: str, max_results: int) -> str | None:
+    """DeepSeek 服务端联网（实验性）。官方公开 API 暂无检索能力，此驱动走
+    自建兼容端点：需设 DEEPSEEK_SEARCH_BASE_URL / DEEPSEEK_SEARCH_MODEL 环境变量。
+    实验 013 已证明该后端对国内政务/行业数据的时效性最强，但用量计费不可审计，
+    仅在对时效性要求极高的任务卡上显式启用。"""
+    base = os.environ.get("DEEPSEEK_SEARCH_BASE_URL")
+    model = os.environ.get("DEEPSEEK_SEARCH_MODEL", "deepseek-v4-flash")
+    if not base:
+        return ("[deepseek-search] 未配置：请设置 DEEPSEEK_SEARCH_BASE_URL "
+                "（指向带服务端联网的兼容端点）。公开 api.deepseek.com 不提供检索，"
+                "请改用 tavily / ddg 后端。")
+    key = os.environ.get("DEEPSEEK_API_KEY", "")
+    code, body = _http_json(base.rstrip("/") + "/chat/completions", {
+        "model": model,
+        "messages": [{"role": "user", "content":
+                      f"联网检索以下问题，返回 {max_results} 条以内结果，"
+                      f"每条含：标题 / URL / 数据发布时间（精确到年月）/ 一句话摘要。\n查询：{query}"}],
+        "max_tokens": 2000})
+    if code == 200:
+        try:
+            content = json.loads(body)["choices"][0]["message"]["content"]
+            return f"[deepseek-search 实验性·用量不可审计] 查询: {query}\n{content}"
+        except (json.JSONDecodeError, KeyError, IndexError):
+            pass
+    return f"[deepseek-search] HTTP {code}: {body[:300]}"
+
+
+SEARCH_DRIVERS = {"tavily": _search_tavily, "ddg": _search_ddg,
+                  "deepseek": _search_deepseek}
+SEARCH_FALLBACK = ("tavily", "ddg")   # auto 模式的降级链
+
+
+def web_search(query: str, max_results: int = 5, backend: str = "auto") -> str:
+    """可插拔检索入口。backend: auto（tavily→ddg 降级）或 SEARCH_DRIVERS 中的具体驱动名。"""
+    if backend == "auto":
+        for name in SEARCH_FALLBACK:
+            out = SEARCH_DRIVERS[name](query, max_results)
+            if out:
+                return out
+        return "检索失败：auto 降级链（tavily→ddg）均不可用"
+    driver = SEARCH_DRIVERS.get(backend)
+    if not driver:
+        return f"错误：未知检索后端 '{backend}'，可选: auto / {', '.join(SEARCH_DRIVERS)}"
+    out = driver(query, max_results)
+    if out:
+        return out
+    # 指定后端无结果 → 兜底提示（不擅自跨后端，保持路由可预期、账本可归因）
+    return (f"[{backend}] 无结果或不可用。如需降级，请在任务卡把 search_backend 改为 auto，"
+            f"或换一个查询词重试。")
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +378,7 @@ class Toolbox:
         ecfg = CONFIG["engineer_tools"]
         self.allow_cmd = ecfg["allow_run_command"]
         self.allow_search = ecfg.get("allow_web_search", True)
+        self.search_backend = str(ecfg.get("search_backend", "auto"))  # 可被任务卡覆盖
         self.cmd_timeout = ecfg["command_timeout_sec"]
         self.deny = [re.compile(p) for p in ecfg["command_deny_patterns"]]
         self.search_history: set[str] = set()   # 查询去重，防烧检索额度
@@ -348,8 +412,10 @@ class Toolbox:
         ]
         if self.allow_search:
             tools.append(
-                fn("web_search", "联网检索（Tavily 主力，自动降级）。用于查证外部事实/最新资料；"
-                   "结果含标题+URL+摘要。纪律：结论必须附来源 URL，优先官方域名，"
+                fn("web_search", f"联网检索（当前后端: {self.search_backend}）。"
+                   "用于查证外部事实/最新资料；结果含标题+URL+摘要。"
+                   "纪律：查询词带时间约束（如「2026年最新」）以保证时效性；"
+                   "结论必须附来源 URL，优先官方域名；"
                    "同一查询不要重复检索，检索结果及时落盘保存",
                    {"query": {"type": "string"},
                     "max_results": {"type": "integer", "description": "默认 5，最大 10"}},
@@ -385,7 +451,7 @@ class Toolbox:
                     return "提示：该查询已检索过，结果请查阅之前的返回；避免重复烧额度"
                 self.search_history.add(q)
                 mr = max(1, min(int(args.get("max_results", 5)), 10))
-                return web_search(q, mr)
+                return web_search(q, mr, self.search_backend)
             if name == "run_command":
                 cmd = args["command"]
                 if any(d.search(cmd) for d in self.deny):
@@ -414,15 +480,19 @@ artifact_refs（相关文件路径，需自行读取）。
 4. 只写本任务目标内的文件；其他任务可能并行进行，绝不改动卡片未授权你写的共享文件
    （跨任务成果的组装是"集成卡"的职责，不是你的）；
 5. 需要外部事实/最新资料时用 web_search 检索查证，禁止凭训练记忆编造；
-   结论必须附来源 URL（优先官方域名），检索结果及时 write_file 落盘（如 research/ 目录）
-   供下游任务引用；
+   查询词必须带时间约束（如「2026年最新」「截至2026」）以避免抓到过期口径；
+   结论必须附来源 URL（优先官方域名）与数据发布时间（精确到年月），
+   检索结果及时 write_file 落盘（如 research/ 目录）供下游任务引用；
 6. 完成后调用 finish 提交结构化总结，必须包含四块：改动文件清单 / 实际运行的命令 /
    命令输出摘要 / 已知风险。finish 是"我做完了一步"，最终验收由架构师基于
    实际执行结果判定，不由你宣布。"""
 
 
-def run_engineer(packet: HandoffPacket, workdir: Path, llm: LLM) -> dict:
+def run_engineer(packet: HandoffPacket, workdir: Path, llm: LLM,
+                 search_backend: str = "") -> dict:
     tb = Toolbox(workdir)
+    if search_backend:   # 任务卡级路由覆盖全局默认（实验 014：后端可插拔）
+        tb.search_backend = search_backend
     messages = [
         {"role": "system", "content": ENGINEER_SYS},
         {"role": "user", "content": "任务移交包：\n" + json.dumps(asdict(packet), ensure_ascii=False, indent=2)},
@@ -663,7 +733,8 @@ class Orchestrator:
             # 2. 工程师执行（卡片状态置 doing）
             card.touch(status="doing", owner="engineer")
             card.save(self.tasks_dir)
-            eng = run_engineer(packet, self.workdir, self.engineer)
+            eng = run_engineer(packet, self.workdir, self.engineer,
+                               search_backend=card.search_backend)
             print(f"[engineer] {eng['status']}: {eng['summary'][:80]}")
             # 结构化回报写入卡片
             card.report = (f"状态: {eng['status']}\n\n{eng['summary']}\n\n"

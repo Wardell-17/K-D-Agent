@@ -43,6 +43,14 @@ escalation:
 engineer_tools:
   allow_run_command: true
   allow_web_search: true      # 实验012·B组：启用检索
+  # 检索后端路由（实验014：可插拔 driver）
+  #   auto     = tavily → ddg 降级链（默认，成本可审计优先）
+  #   tavily   = 只用 Tavily（付费·可审计，1000次/月免费档）
+  #   ddg      = 只用 DuckDuckGo（免费兜底，零成本）
+  #   deepseek = DeepSeek 服务端联网（实验性，时效最强但用量不可审计，
+  #              需设 DEEPSEEK_SEARCH_BASE_URL；仅时效敏感任务卡显式启用）
+  # 任务卡 frontmatter 的 search_backend 字段可对此处全局默认做单卡覆盖
+  search_backend: auto
   command_timeout_sec: 60
   # run_command 命令黑名单（正则），防止不可逆操作
   command_deny_patterns:
