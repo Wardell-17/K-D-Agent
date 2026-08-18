@@ -23,6 +23,19 @@
             contextWindow: 262144
             maxTokens: 32768
 
+      # DeepSeek 直连 provider：绕开凭证服务（spawn 子代理不回落环境变量，
+      # 凭证服务存在但无记录时直接报 MISSING_CREDENTIAL —— 见实验记录 013）
+      deepseek-direct:
+        displayName: DeepSeek Direct (env)
+        apiKeyEnv: DEEPSEEK_API_KEY
+        api: openai-completions
+        baseURL: https://api.deepseek.com
+        models:
+          - id: deepseek-chat        # 官方 API 别名，当前指向 V4-Flash 正式版
+            name: DeepSeek V4-Flash
+            contextWindow: 131072
+            maxTokens: 32768
+
 # 2. 把默认模型指向 Kimi K3（主会话 = 架构师）
 - id: agent-default-model
   name: '@deepseek-ai/dsh-agent-default-model'
@@ -55,8 +68,8 @@
     toolName: subagent
     backgroundMode: continuable
     agentOptions:
-      provider: deepseek-official
-      model: deepseek-v4-flash
+      provider: deepseek-direct     # 走 env 直连，绕开凭证服务（实验记录 013）
+      model: deepseek-chat
       maxTokens: 32768
     persona: >-
       你是工程师。严格执行架构师交付的子任务：写代码、跑命令、验证结果。

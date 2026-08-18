@@ -194,8 +194,8 @@
         toolName: subagent
         backgroundMode: continuable
         agentOptions:
-          provider: deepseek-official
-          model: deepseek-v4-flash
+          provider: deepseek-direct
+          model: deepseek-chat
           maxTokens: 32768
         persona: >-
           你是工程师。严格执行架构师交付的子任务：写代码、写文档、跑命令、验证结果。

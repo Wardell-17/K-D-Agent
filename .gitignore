@@ -34,3 +34,4 @@ __pycache__/
 *.pyc
 Thumbs.db
 api.txt
+.credentials.yaml
