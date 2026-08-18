@@ -303,7 +303,10 @@ def _search_tavily(query: str, max_results: int) -> str | None:
 
 
 def _search_ddg(query: str, max_results: int) -> str | None:
-    """DuckDuckGo HTML（免费无 key，零成本兜底）。失败/无结果 → None。"""
+    """DuckDuckGo HTML（免费无 key，零成本兜底）。失败/无结果 → None。
+    ⚠ 实验 014 实测（2026-08-18）：DDG html/lite 端点对数据中心 IP 返回
+    HTTP 202 反爬拦截页，Bing 直连/代理均返回机器人填充页——免费 HTML 抓取
+    在当前网络环境已不可用，此驱动仅作占位，auto 链实际等于 tavily-only。"""
     q = urllib.parse.quote(query)
     code, body = _http_json(f"https://html.duckduckgo.com/html/?q={q}", None)
     if code == 200:
