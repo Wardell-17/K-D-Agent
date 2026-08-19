@@ -64,6 +64,7 @@ engineer_tools:
   extra_read_roots:
     - "D:\\agent-project\\harness-src"
     - "D:\\agent-project\\architect-engineer"
+    - "D:\\agent-project\\target-repos"
 
 # 成本与日志
 logging:
