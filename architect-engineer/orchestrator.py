@@ -388,6 +388,7 @@ class Toolbox:
         self.cmd_timeout = ecfg["command_timeout_sec"]
         self.deny = [re.compile(p) for p in ecfg["command_deny_patterns"]]
         self.search_history: set[str] = set()   # 查询去重，防烧检索额度
+        self.written: list[str] = []            # 实际写过的文件（供预算耗尽时取证）
 
     def _safe(self, rel: str) -> Path:
         p = (self.workdir / rel).resolve()
@@ -459,6 +460,7 @@ class Toolbox:
                 p = self._safe(args["path"])
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(args["content"], encoding="utf-8")
+                self.written.append(str(p.relative_to(self.workdir)))
                 return f"已写入 {p}（{len(args['content'])} 字符）"
             if name == "list_dir":
                 p = self._safe_read(args.get("path", "."))
@@ -534,7 +536,7 @@ def run_engineer(packet: HandoffPacket, workdir: Path, llm: LLM,
             if text_only_streak >= 2:
                 return {"status": "finished_implicit",
                         "summary": (msg.content or "")[:2000],
-                        "tool_calls": tb.call_counts}
+                        "tool_calls": tb.call_counts, "written_files": tb.written}
             messages.append({"role": "user", "content":
                 "如果你已完成本任务，请调用 finish 工具提交结构化总结；"
                 "如果还没完成，请继续用工具推进。"})
@@ -546,12 +548,12 @@ def run_engineer(packet: HandoffPacket, workdir: Path, llm: LLM,
             args = json.loads(tc.function.arguments or "{}")
             if name == "finish":
                 return {"status": "finished", "summary": args.get("summary", ""),
-                        "tool_calls": tb.call_counts}
+                        "tool_calls": tb.call_counts, "written_files": tb.written}
             result = tb.execute(name, args)
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
         budget -= 1
     return {"status": "budget_exhausted", "summary": "轮数预算耗尽",
-            "tool_calls": tb.call_counts}
+            "tool_calls": tb.call_counts, "written_files": tb.written}
 
 
 # ---------------------------------------------------------------------------
@@ -609,6 +611,9 @@ Windows 原生命令（dir/type）或 python -c 一行流；严禁 test/grep/cat
 ARCHITECT_REVIEW_SYS = """你是首席架构师，正在验收工程师的工作。你会看到：
 移交包、工程师自述的总结、以及验证器对验收命令的真实执行结果（证据）。
 规则：证据失败则必须返工；工程师的总结只是自述，不能当作完成证明。
+若 payload 含 process_note（工程师未走 finish 流程，如预算耗尽/隐式收尾）：
+仅以验证器证据与实际落盘产物判定达标与否——产物达标则 pass 并在 reason 注明
+"流程收尾缺失但产物达标"；产物不达标才 rework。不因流程缺失本身否决。
 只输出 JSON：{"verdict": "pass" 或 "rework", "reason": "...", 
 "fix_instructions": "若 rework，给工程师的具体修复指令" }"""
 
@@ -764,9 +769,17 @@ class Orchestrator:
             # 3. 验证器跑真实检查（产出新信息——执行证据）
             ver = verify(packet, self.workdir)
             # 4. 架构师基于证据验收（审核者读独立证据，而非只听提议者自述）
-            review = ask_json(self.architect, ARCHITECT_REVIEW_SYS, json.dumps({
+            review_payload = {
                 "packet": asdict(packet), "engineer_report": eng,
-                "verification": ver}, ensure_ascii=False))
+                "verification": ver}
+            if eng["status"] != "finished":
+                # 实验 015 教训：预算耗尽/隐式收尾 ≠ 任务失败——提示架构师只看证据
+                review_payload["process_note"] = (
+                    f"工程师未走 finish 流程（{eng['status']}）。"
+                    f"其实际写过的文件: {eng.get('written_files', [])}。"
+                    "请仅以验证器证据与落盘产物判定，不因流程缺失本身否决。")
+            review = ask_json(self.architect, ARCHITECT_REVIEW_SYS, json.dumps(
+                review_payload, ensure_ascii=False))
             self.log_handoff(f"{packet.task_id}-review.json",
                              {"engineer": eng, "verification": ver, "review": review})
             if review.get("verdict") == "pass" and ver["all_passed"]:
