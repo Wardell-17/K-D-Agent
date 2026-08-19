@@ -162,6 +162,7 @@ class TaskCard:
     report: str = ""              # 结构化回报（工程师 finish 后由编排器填入）
     notes: list[str] = field(default_factory=list)  # 返工指令等追加记录
     search_backend: str = ""      # 检索后端路由：""=跟随全局配置；可填 auto/tavily/ddg/deepseek
+    budget: int = 0               # ReAct 轮数预算：0=跟随全局默认；深读类任务人工审卡时可加到 20
 
     FRONT_KEYS = ("id", "title", "status", "owner", "created", "updated", "depends_on")
 
@@ -175,6 +176,8 @@ class TaskCard:
               f'depends_on: {deps}']
         if self.search_backend:
             fm.append(f'search_backend: "{esc(self.search_backend)}"')
+        if self.budget:
+            fm.append(f'budget: {int(self.budget)}')
         acc = "\n".join(f"- {a}" for a in self.acceptance) or "- （无）"
         facts = "\n".join(f"- {f}" for f in self.confirmed_facts) or "- （无）"
         refs = "\n".join(f"- {r}" for r in self.artifact_refs) or "- （无）"
@@ -226,6 +229,7 @@ def load_card(path: Path) -> tuple[HandoffPacket, TaskCard]:
     if not goal:
         raise ValueError(f"任务卡缺少 ## 目标 一节: {path}")
     deps = [str(d) for d in (fm.get("depends_on") or [])]
+    budget = int(fm.get("budget") or 0)
     packet = HandoffPacket(
         task_id=str(fm.get("id", Path(path).stem.replace("card-", ""))),
         goal=goal,
@@ -234,6 +238,8 @@ def load_card(path: Path) -> tuple[HandoffPacket, TaskCard]:
         artifact_refs=_bullets(body, "产物引用"),
         depends_on=deps,
     )
+    if budget > 0:
+        packet.remaining_budget = budget   # 卡级预算覆盖全局默认（015：深读类任务 12 轮不够）
     card = TaskCard(task_id=packet.task_id, title=str(fm.get("title", goal[:40])),
                     goal=goal, acceptance=packet.acceptance,
                     confirmed_facts=packet.confirmed_facts,
@@ -245,7 +251,8 @@ def load_card(path: Path) -> tuple[HandoffPacket, TaskCard]:
                     depends_on=deps,
                     report=_section(body, "结构化回报"),
                     notes=_bullets(body, "返工与备注"),
-                    search_backend=str(fm.get("search_backend", "") or ""))
+                    search_backend=str(fm.get("search_backend", "") or ""),
+                    budget=budget)
     return packet, card
 
 

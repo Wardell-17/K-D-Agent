@@ -6,6 +6,7 @@ owner: "architect"
 created: "2026-08-19T16:00:00"
 updated: "2026-08-19T16:00:00"
 depends_on: []
+budget: 20
 ---
 
 # 任务卡 t2b：DSH 四大子系统源码级深读
