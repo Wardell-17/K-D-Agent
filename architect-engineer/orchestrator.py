@@ -429,7 +429,11 @@ class Toolbox:
                 "name": name, "description": desc,
                 "parameters": {"type": "object", "properties": props, "required": required}}}
         tools = [
-            fn("read_file", "读取工作目录中的文件内容", {"path": {"type": "string"}}, ["path"]),
+            fn("read_file", "读取工作目录中的文件内容。单次最多返回 20000 字符；"
+               "文件被截断时会提示总长度，用 offset 参数翻页续读",
+               {"path": {"type": "string"},
+                "offset": {"type": "integer", "description": "从第几个字符开始读，默认 0；"
+                           "用于翻页读超大文件（如 offset=20000 读第二页）"}}, ["path"]),
             fn("write_file", "把内容写入工作目录中的文件（自动创建父目录）",
                {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
             fn("list_dir", "列出工作目录（或子目录）下的文件",
@@ -459,7 +463,15 @@ class Toolbox:
         self.count(name)
         try:
             if name == "read_file":
-                return self._safe_read(args["path"]).read_text(encoding="utf-8")[:20000]
+                full = self._safe_read(args["path"]).read_text(encoding="utf-8")
+                off = max(0, int(args.get("offset", 0) or 0))
+                chunk = full[off:off + 20000]
+                if off >= len(full) and len(full) > 0:
+                    return f"提示：offset={off} 已超出文件总长 {len(full)} 字符，无内容"
+                note = (f"[文件共 {len(full)} 字符，本次返回 {off}~{off + len(chunk)}"
+                        + (f"，剩余 {len(full) - off - len(chunk)} 字符可用 offset 续读]"
+                           if off + len(chunk) < len(full) else "，已到文件末尾]"))
+                return note + "\n" + chunk
             if name == "list_dir":
                 p = self._safe_read(args.get("path", "."))
                 return "\n".join(sorted(x.name for x in p.iterdir())) or "(空目录)"
@@ -503,7 +515,9 @@ goal（要做什么）、acceptance（验收标准）、confirmed_facts（已确
 artifact_refs（相关文件路径，需自行读取）。
 
 工作纪律：
-1. 先读 artifact_refs 里的相关文件，再动手；
+1. 先读 artifact_refs 里的相关文件，再动手；大文件单次只返回 20000 字符——
+   若返回头提示有剩余，说明只读了前半截，关键逻辑可能在后半段，
+   必须用 offset 参数翻页读完再下结论，禁止凭半截文件臆测全貌；
 2. 每完成一步用 run_command 实际验证（跑测试/脚本），不要凭感觉声明完成；
 3. 遇到命令失败，读错误输出、修复、重试；同一错误连续两次则换方案；
 4. 只写本任务目标内的文件；其他任务可能并行进行，绝不改动卡片未授权你写的共享文件
