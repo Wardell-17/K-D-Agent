@@ -382,6 +382,9 @@ class Toolbox:
         self.allow_cmd = ecfg["allow_run_command"]
         self.allow_search = ecfg.get("allow_web_search", True)
         self.search_backend = str(ecfg.get("search_backend", "auto"))  # 可被任务卡覆盖
+        # 只读的额外根目录（实验 015：读外部源码仓库等场景；写入仍严格限于工作目录）
+        self.extra_roots = [str(Path(r).resolve())
+                            for r in ecfg.get("extra_read_roots", [])]
         self.cmd_timeout = ecfg["command_timeout_sec"]
         self.deny = [re.compile(p) for p in ecfg["command_deny_patterns"]]
         self.search_history: set[str] = set()   # 查询去重，防烧检索额度
@@ -391,6 +394,17 @@ class Toolbox:
         if not str(p).startswith(str(self.workdir)):
             raise PermissionError(f"路径越界被拒绝: {rel}")
         return p
+
+    def _safe_read(self, rel: str) -> Path:
+        """读文件专用：工作目录内 或 声明过的只读根目录内（绝对路径）。"""
+        p = Path(rel)
+        if p.is_absolute():
+            rp = str(p.resolve())
+            for root in [str(self.workdir)] + self.extra_roots:
+                if rp.startswith(root):
+                    return p.resolve()
+            raise PermissionError(f"读取越界被拒绝（不在工作目录或只读根内）: {rel}")
+        return self._safe(rel)
 
     def count(self, name: str):
         self.call_counts[name] = self.call_counts.get(name, 0) + 1
@@ -437,14 +451,17 @@ class Toolbox:
         self.count(name)
         try:
             if name == "read_file":
-                return self._safe(args["path"]).read_text(encoding="utf-8")[:20000]
+                return self._safe_read(args["path"]).read_text(encoding="utf-8")[:20000]
+            if name == "list_dir":
+                p = self._safe_read(args.get("path", "."))
+                return "\n".join(sorted(x.name for x in p.iterdir())) or "(空目录)"
             if name == "write_file":
                 p = self._safe(args["path"])
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(args["content"], encoding="utf-8")
                 return f"已写入 {p}（{len(args['content'])} 字符）"
             if name == "list_dir":
-                p = self._safe(args.get("path", "."))
+                p = self._safe_read(args.get("path", "."))
                 return "\n".join(sorted(x.name for x in p.iterdir())) or "(空目录)"
             if name == "web_search":
                 q = str(args.get("query", "")).strip()

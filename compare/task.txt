@@ -1,1 +1,10 @@
-写一份事实清单 facts.md，包含三条事实，每条一行、格式为「事实内容 | 数据来源」：1) GB 17761-2024《电动自行车安全技术规范》的实施日期；2) 2025 年中国电动自行车社会保有量（工信部口径）；3) 深圳市电动自行车上牌保有量（最新公开口径）。每条必须给出具体数字/日期和来源名称。
+真实任务：通读 deepseek-harness 官方源码（已浅克隆到本地 D:\agent-project\harness-src，pnpm monorepo，约 50 个 package），产出一份架构对比报告 harness-vs-mvp.md，对照我们自己的 MVP 编排器（D:\agent-project\architect-engineer\orchestrator.py，约 750 行）。
+
+源码结构（packages/ 下）：acp api attachment boot bundle client code-runtime compaction context core credentials e2b examples extensions feedback fs goal guard hooks host identity interaction jobs llm lsp mcp plan preset runtime-diagnostics sandbox schedule sdk session session-query settings shell skill spill storage subagent subprocess terminal todo util web workflow workspace；另有 apps/cli 与 apps/web。
+
+报告要求：
+1. DSH 的总体架构分层与启动链路（从 CLI 入口到 agent 循环）；
+2. 四个我们亲测踩过坑的子系统必须深读并给出源码级结论：llm（多模型与搜索后端）、credentials（凭证服务为何不回落环境变量）、subagent（子代理派工机制）、preset（预设与工具组合机制）；
+3. 每个子系统一节：DSH 怎么实现 vs 我们 MVP 怎么实现 vs 谁的设计更好及理由，结论必须有源码文件路径作证；
+4. 最后一节总结：哪些 DSH 机制值得我们吸收进 MVP 路线图。
+纪律：所有结论必须基于真实读到的源码，引用具体文件路径；读不懂的模块如实标注，禁止编造。

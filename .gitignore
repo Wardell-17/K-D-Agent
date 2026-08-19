@@ -35,3 +35,5 @@ __pycache__/
 Thumbs.db
 api.txt
 .credentials.yaml
+harness-src/
+harness-src/

@@ -59,6 +59,12 @@ engineer_tools:
     - "format\\s"
     - "git\\s+push"
 
+  # 只读的额外根目录（实验 015：工程师 read_file/list_dir 可读工作目录之外的
+  # 指定目录，用于"读外部源码仓库"类任务；写入仍严格限于工作目录）
+  extra_read_roots:
+    - "D:\\agent-project\\harness-src"
+    - "D:\\agent-project\\architect-engineer"
+
 # 成本与日志
 logging:
   dir: runs                # 每次运行一个子目录：cost.jsonl / handoffs/ / artifacts/
