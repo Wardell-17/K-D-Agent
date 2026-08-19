@@ -640,14 +640,17 @@ ARCHITECT_REVIEW_SYS = """你是首席架构师，正在验收工程师的工作
 
 
 class Orchestrator:
-    def __init__(self, task: str):
+    def __init__(self, task: str, run_dir: Path | None = None):
         self.task = task
-        self.run_dir = ROOT / CONFIG["logging"]["dir"] / time.strftime("%Y%m%d-%H%M%S")
+        # resume 模式复用既有 run 目录（断点续跑），否则按时间戳新建
+        self.run_dir = Path(run_dir) if run_dir else \
+            ROOT / CONFIG["logging"]["dir"] / time.strftime("%Y%m%d-%H%M%S")
+        self.resuming = run_dir is not None
         self.workdir = self.run_dir / "workspace"   # 产物区（工程师的工作目录）
         self.workdir.mkdir(parents=True, exist_ok=True)
-        (self.run_dir / "handoffs").mkdir()
+        (self.run_dir / "handoffs").mkdir(exist_ok=True)
         self.tasks_dir = self.run_dir / "tasks"     # 任务卡目录（卡片驱动）
-        self.tasks_dir.mkdir()
+        self.tasks_dir.mkdir(exist_ok=True)
         self.cards: dict[str, TaskCard] = {}
         self.tracker = CostTracker(self.run_dir / "cost.jsonl")
         self.architect = LLM("architect", self.tracker)
@@ -693,12 +696,14 @@ class Orchestrator:
                     "run_dir": str(self.run_dir)}
         return self._finish(self._schedule(packets))
 
-    def _schedule(self, packets: dict[str, tuple[HandoffPacket, TaskCard]]) -> list:
+    def _schedule(self, packets: dict[str, tuple[HandoffPacket, TaskCard]],
+                  pre_done: set[str] | None = None) -> list:
         """依赖感知并行调度器：depends_on 全部 done 的卡立即派发，线程池并行执行。
-        前置卡失败/升级 → 依赖它的卡冻结为 escalated（不浪费 token 跑必败任务）。"""
+        前置卡失败/升级 → 依赖它的卡冻结为 escalated（不浪费 token 跑必败任务）。
+        pre_done：断点续跑时已完成的卡 id 集，视为依赖已满足且不重复执行。"""
         max_workers = CONFIG.get("parallel", {}).get("max_workers", 3)
         results: list[dict] = []
-        done: set[str] = set()
+        done: set[str] = set(pre_done or set())
         failed: set[str] = set()
         pending = dict(packets)
         futures: dict = {}
@@ -752,25 +757,42 @@ class Orchestrator:
         print(f"\n--- 子任务 {packet.task_id}: {packet.goal[:60]}")
         return self._finish([self._execute_packet(packet, card)])
 
-    def run_cards(self, cards_dir: Path) -> dict:
-        """--cards 模式（PM 卡盒）：读入目录下全部任务卡，按依赖关系批量并行调度。"""
+    def run_cards(self, cards_dir: Path, resume: bool = False) -> dict:
+        """--cards 模式（PM 卡盒）：读入目录下全部任务卡，按依赖关系批量并行调度。
+        resume=True 时（断点续跑）：done 卡跳过不重跑（依赖视为已满足），
+        doing/rework 卡重置为 todo 续跑，escalated 卡保持人工持有不动。"""
         cards_dir = Path(cards_dir)
         files = sorted(cards_dir.glob("*.md"))
         if not files:
             raise RuntimeError(f"卡盒目录里没有 .md 任务卡: {cards_dir}")
         packets: dict[str, tuple[HandoffPacket, TaskCard]] = {}
+        pre_done: set[str] = set()
+        results: list[dict] = []
         for f in files:
             packet, card = load_card(f)
             if packet.task_id in packets:
                 raise RuntimeError(f"任务卡 id 重复: {packet.task_id}（{f}）")
+            if resume:
+                if card.status == "done":
+                    pre_done.add(packet.task_id)
+                    results.append({"task_id": packet.task_id, "verdict": "skipped",
+                                    "reason": "断点续跑：已完成，跳过不重跑"})
+                    print(f"[resume] {packet.task_id}: 已完成，跳过")
+                    self.cards[packet.task_id] = card
+                    continue
+                if card.status in ("doing", "rework"):
+                    card.touch(status="todo", owner="architect")
+                    card.notes.append("断点续跑：中断状态重置为 todo 续跑")
+                    print(f"[resume] {packet.task_id}: {card.status} → 重置续跑")
             card.notes.append(f"由 --cards 模式载入，来源: {f}")
             card.save(self.tasks_dir)
             self.cards[packet.task_id] = card
             packets[packet.task_id] = (packet, card)
             print(f"[card] {packet.task_id}: {packet.goal[:60]}"
                   + (f"（依赖: {', '.join(packet.depends_on)}）" if packet.depends_on else ""))
-        print(f"[pm] 卡盒共 {len(packets)} 张卡，开始调度")
-        return self._finish(self._schedule(packets))
+        print(f"[pm] 卡盒共 {len(packets)} 张待执行（跳过 {len(pre_done)} 张已完成），开始调度")
+        results.extend(self._schedule(packets, pre_done=pre_done))
+        return self._finish(results)
 
     def _execute_packet(self, packet: HandoffPacket, card: TaskCard) -> dict:
         """单张卡的执行循环：工程师执行 → 验证器取证 → 架构师验收 → 通过/返工/升级。"""
@@ -842,6 +864,7 @@ if __name__ == "__main__":
         print('      python orchestrator.py --plan-only "任务"   （只拆卡不执行，审卡后再放行）')
         print('      python orchestrator.py --card  <任务卡.md>')
         print('      python orchestrator.py --cards <卡盒目录>')
+        print('      python orchestrator.py --resume <run目录> （断点续跑：done 跳过，中断卡重置续跑）')
         sys.exit(1)
     if sys.argv[1] == "--card":
         if len(sys.argv) < 3:
@@ -851,6 +874,13 @@ if __name__ == "__main__":
         if len(sys.argv) < 3:
             print("缺少卡盒目录"); sys.exit(1)
         Orchestrator(f"--cards {sys.argv[2]}").run_cards(Path(sys.argv[2]))
+    elif sys.argv[1] == "--resume":
+        if len(sys.argv) < 3:
+            print("缺少 run 目录路径"); sys.exit(1)
+        rd = Path(sys.argv[2])
+        if not (rd / "tasks").is_dir():
+            print(f"不是有效 run 目录（缺 tasks/）: {rd}"); sys.exit(1)
+        Orchestrator(f"--resume {rd}", run_dir=rd).run_cards(rd / "tasks", resume=True)
     elif sys.argv[1] == "--plan-only":
         if len(sys.argv) < 3:
             print("缺少任务描述"); sys.exit(1)
