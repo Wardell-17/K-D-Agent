@@ -749,6 +749,14 @@ class Orchestrator:
             print(f"\n--- 子任务 {packet.task_id}: {packet.goal[:60]}"
                   + (f"（依赖: {', '.join(packet.depends_on)}）" if packet.depends_on else ""))
             print(f"[card] {self.tasks_dir / ('card-' + packet.task_id + '.md')}")
+        # 看板发卡台的预算滑块：KD_FORCE_BUDGET 环境变量强制覆盖全部子任务预算（021）
+        force_budget = int(os.environ.get("KD_FORCE_BUDGET") or 0)
+        if force_budget > 0:
+            for packet, card in packets.values():
+                packet.remaining_budget = force_budget
+                card.budget = force_budget
+                card.notes.append(f"预算由看板滑块指定: {force_budget} 轮")
+                card.save(self.tasks_dir)
         if plan_only:
             # 审批门（plan-approve gate）：拆卡落盘后即停，人审卡/改卡后再用 --cards 放行
             print(f"\n[plan-only] 已生成 {len(packets)} 张任务卡，未执行。")

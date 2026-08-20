@@ -1,17 +1,54 @@
 # -*- coding: utf-8 -*-
 """K-D Agent 看板 · 纯读盘层（实验 021）
-职责：只读 runs/ 目录下的落盘事实（任务卡 / cost.jsonl / events.jsonl / workspace 产物），
-不 import streamlit，不写任何文件——看板与引擎的唯一契约就是磁盘。
+职责：只读 runs/ 目录下的落盘事实（任务卡 / cost.jsonl / events.jsonl / workspace 产物）。
+零三方依赖（frontmatter 用内置迷你解析器），不 import streamlit / orchestrator，
+不写任何文件——看板与引擎的唯一契约就是磁盘。Blueprint 托管 Python 沙箱也可直接 import。
 """
 import json
-import sys
+import re
 from pathlib import Path
 
 AE_DIR = Path(__file__).resolve().parent.parent / "architect-engineer"
-sys.path.insert(0, str(AE_DIR))
-from orchestrator import CONFIG, load_card  # noqa: E402  复用卡片解析，避免两套 frontmatter 逻辑
 
-RUNS_DIR = AE_DIR / CONFIG["logging"]["dir"]
+
+def _load_logging_dir() -> str:
+    """从 config.yaml 抠 logging.dir（迷你解析，不引 yaml 包）。"""
+    cfg = AE_DIR / "config.yaml"
+    if cfg.is_file():
+        m = re.search(r"(?m)^\s*dir:\s*[\"']?([\w./-]+)", cfg.read_text(encoding="utf-8"))
+        if m:
+            return m.group(1)
+    return "runs"
+
+
+RUNS_DIR = AE_DIR / _load_logging_dir()
+
+
+def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    """解析 Markdown + 简化 YAML frontmatter（仅支持本项目卡片用到的平铺键值）。"""
+    m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.DOTALL)
+    if not m:
+        return {}, text
+    fm: dict = {}
+    for line in m.group(1).splitlines():
+        kv = re.match(r"^(\w+):\s*(.*)$", line.strip())
+        if not kv:
+            continue
+        key, val = kv.group(1), kv.group(2).strip()
+        if val.startswith("["):  # 简易数组: ["a", "b"]
+            fm[key] = re.findall(r'"([^"]*)"', val)
+        elif val.startswith('"'):
+            fm[key] = val.strip('"')
+        elif val.isdigit():
+            fm[key] = int(val)
+        else:
+            fm[key] = val
+    return fm, m.group(2)
+
+
+def _section(body: str, name: str) -> str:
+    m = re.search(rf"##\s*{re.escape(name)}\s*\n(.*?)(?=\n##\s|\Z)", body, re.DOTALL)
+    return m.group(1).strip() if m else ""
 
 
 def list_runs() -> list[Path]:
@@ -23,24 +60,31 @@ def list_runs() -> list[Path]:
 
 
 def load_cards(run_dir: Path) -> list[dict]:
-    """读 run 目录 tasks/ 下全部任务卡，返回 dict 列表（按 id 排序）。"""
+    """读 run 目录 tasks/ 下全部任务卡，返回 dict 列表。"""
     cards = []
     tasks_dir = Path(run_dir) / "tasks"
     for f in sorted(tasks_dir.glob("*.md")):
         try:
-            packet, card = load_card(f)
+            fm, body = _parse_frontmatter(f.read_text(encoding="utf-8"))
+            goal = _section(body, "目标")
+            notes = [l.lstrip("- ").strip() for l in
+                     _section(body, "返工与备注").splitlines() if l.strip().startswith("-")]
+            cards.append({
+                "id": str(fm.get("id", f.stem.replace("card-", ""))),
+                "title": str(fm.get("title", goal[:40])),
+                "status": str(fm.get("status", "todo")),
+                "owner": str(fm.get("owner", "")),
+                "goal": goal,
+                "depends_on": [str(x) for x in (fm.get("depends_on") or [])],
+                "budget": int(fm.get("budget") or 0) or 12,
+                "search_backend": str(fm.get("search_backend", "")),
+                "notes": notes,
+                "report": _section(body, "结构化回报"),
+            })
         except Exception as e:
             cards.append({"id": f.stem, "title": f"（解析失败: {e}）", "status": "escalated",
                           "owner": "human", "goal": "", "depends_on": [], "budget": 0,
-                          "report": "", "notes": []})
-            continue
-        cards.append({
-            "id": card.task_id, "title": card.title, "status": card.status,
-            "owner": card.owner, "goal": card.goal, "depends_on": card.depends_on,
-            "budget": card.budget or packet.remaining_budget,
-            "report": card.report, "notes": card.notes,
-            "search_backend": card.search_backend,
-        })
+                          "report": "", "notes": [], "search_backend": ""})
     return cards
 
 
@@ -83,7 +127,7 @@ def load_events(run_dir: Path) -> list[dict]:
 
 
 def workspace_files(run_dir: Path) -> list[Path]:
-    """产物区文件列表（相对路径）。"""
+    """产物区文件列表。"""
     ws = Path(run_dir) / "workspace"
     if not ws.is_dir():
         return []
@@ -91,7 +135,7 @@ def workspace_files(run_dir: Path) -> list[Path]:
 
 
 def read_artifact(run_dir: Path, rel: str, limit: int = 40000) -> str:
-    """读产物文件内容（截断保护，防超大文件撑爆页面）。"""
+    """读产物文件内容（截断保护）。"""
     p = (Path(run_dir) / "workspace" / rel).resolve()
     if not str(p).startswith(str((Path(run_dir) / "workspace").resolve())):
         return "（路径越界，已拒绝）"

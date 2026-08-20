@@ -38,3 +38,6 @@ api.txt
 harness-src/
 harness-src/
 target-repos/
+dashboard/state.json
+dashboard/st.log
+dashboard/st.err
