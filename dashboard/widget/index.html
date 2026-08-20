@@ -519,7 +519,8 @@ function adapt(snap){
     pending: (snap.pending_approvals || []).map(p => ({
       run: esc(p.run),
       cards: (p.cards || []).map(c => ({ id: esc(c.id), title: esc(c.title), budget: c.budget || 12 }))
-    }))
+    })),
+    blocked: (snap.launched && snap.launched.blocked) ? esc(snap.launched.message || "已有进行中的任务") : null
   };
 }
 
@@ -829,10 +830,15 @@ function buildBrief(d){
 /* 启动：优先渲染数据管道推送的真实快照，无数据时退回示例数据 */
 let displayedRun = null;    // 钉住的 run：新 run 出现只提示，不抢屏
 let latestSeen = null;
+let lastBlockedMsg = null;  // 防止同一拦截提示反复弹
 
 function boot(snap){
   const d = adapt(snap) || DATA;
   latestSeen = d.run.id;
+  if (d.blocked && d.blocked !== lastBlockedMsg){
+    lastBlockedMsg = d.blocked;
+    toast("⚠ " + d.blocked);
+  }
   if (!displayedRun) displayedRun = d.run.id;
   if (d.run.id !== displayedRun){
     // 主视图钉住不动，弹条提示有新 run
