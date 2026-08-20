@@ -398,8 +398,9 @@ def web_search(query: str, max_results: int = 5, backend: str = "auto") -> str:
 # 工程师工具集（约束：故障安全默认值——只能在工作目录内读写，命令有黑名单）
 # ---------------------------------------------------------------------------
 class Toolbox:
-    def __init__(self, workdir: Path):
+    def __init__(self, workdir: Path, allowed_tools: list[str] | None = None):
         self.workdir = workdir.resolve()
+        self.allowed_tools = set(allowed_tools) if allowed_tools else None  # 角色级工具白名单
         self.call_counts: dict[str, int] = {}
         ecfg = CONFIG["engineer_tools"]
         self.allow_cmd = ecfg["allow_run_command"]
@@ -473,6 +474,9 @@ class Toolbox:
             tools.insert(3, fn("run_command",
                                "在工作目录中执行 shell 命令（有超时与黑名单限制），用于运行测试/脚本",
                                {"command": {"type": "string"}}, ["command"]))
+        if self.allowed_tools is not None:   # 实验 020：角色级工具白名单（finish 永远放行）
+            allow = self.allowed_tools | {"finish"}
+            tools = [t for t in tools if t["function"]["name"] in allow]
         return tools
 
     def execute(self, name: str, args: dict) -> str:
@@ -547,13 +551,25 @@ artifact_refs（相关文件路径，需自行读取）。
    实际执行结果判定，不由你宣布。"""
 
 
+def role_prompt(role: str, key: str, fallback: str) -> str:
+    """实验 020：角色的系统提示词来自 prompts/ 目录（config 声明路径），
+    文件缺失时回落到代码内置版本——改提示词 = 改 .md 文件，不动 Python。"""
+    rel = (CONFIG.get("roles") or {}).get(role, {}).get(key)
+    if rel:
+        f = ROOT / rel
+        if f.exists():
+            return f.read_text(encoding="utf-8")
+    return fallback
+
+
 def run_engineer(packet: HandoffPacket, workdir: Path, llm: LLM,
-                 search_backend: str = "") -> dict:
-    tb = Toolbox(workdir)
+                 search_backend: str = "", system_prompt: str | None = None,
+                 allowed_tools: list[str] | None = None) -> dict:
+    tb = Toolbox(workdir, allowed_tools=allowed_tools)
     if search_backend:   # 任务卡级路由覆盖全局默认（实验 014：后端可插拔）
         tb.search_backend = search_backend
     messages = [
-        {"role": "system", "content": ENGINEER_SYS},
+        {"role": "system", "content": system_prompt or ENGINEER_SYS},
         {"role": "user", "content": "任务移交包：\n" + json.dumps(asdict(packet), ensure_ascii=False, indent=2)},
     ]
     budget = packet.remaining_budget
@@ -679,7 +695,8 @@ class Orchestrator:
     def run(self, plan_only: bool = False) -> dict:
         print(f"[run] 目录: {self.run_dir}")
         # 1. 架构师拆任务
-        plan = ask_json(self.architect, ARCHITECT_PLAN_SYS, f"用户任务：{self.task}")
+        plan = ask_json(self.architect, role_prompt("architect", "prompt_plan",
+                        ARCHITECT_PLAN_SYS), f"用户任务：{self.task}")
         self.log_handoff("plan.json", plan)
         subtasks = plan.get("subtasks", [])
         print(f"[architect] 拆解为 {len(subtasks)} 个子任务")
@@ -818,7 +835,10 @@ class Orchestrator:
             card.touch(status="doing", owner="engineer")
             card.save(self.tasks_dir)
             eng = run_engineer(packet, self.workdir, self.engineer,
-                               search_backend=card.search_backend)
+                               search_backend=card.search_backend,
+                               system_prompt=role_prompt("engineer", "prompt", ENGINEER_SYS),
+                               allowed_tools=(CONFIG.get("roles") or {})
+                                             .get("engineer", {}).get("tools"))
             print(f"[engineer] {eng['status']}: {eng['summary'][:80]}")
             # 结构化回报写入卡片
             card.report = (f"状态: {eng['status']}\n\n{eng['summary']}\n\n"
@@ -837,7 +857,8 @@ class Orchestrator:
                     f"工程师未走 finish 流程（{eng['status']}）。"
                     f"其实际写过的文件: {eng.get('written_files', [])}。"
                     "请仅以验证器证据与落盘产物判定，不因流程缺失本身否决。")
-            review = ask_json(self.architect, ARCHITECT_REVIEW_SYS, json.dumps(
+            review = ask_json(self.architect, role_prompt("architect", "prompt_review",
+                              ARCHITECT_REVIEW_SYS), json.dumps(
                 review_payload, ensure_ascii=False))
             self.log_handoff(f"{packet.task_id}-review.json",
                              {"engineer": eng, "verification": ver, "review": review})
