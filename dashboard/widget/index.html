@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>K-D Agent 工作日志</title>
+<style>
+/* ============================================================
+   K-D Agent 工作日志 · 深夜书房手稿风
+   浅色 = 暖纸台灯下；深色 = 台灯照不到的纸
+   ============================================================ */
+:root{
+  --kd-serif: "Songti SC","STSong","Noto Serif SC","SimSun",serif;
+  --kd-sans: -apple-system,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+  --kd-mono: "SF Mono","JetBrains Mono","Cascadia Code",Consolas,"Courier New",monospace;
+}
+.kd-root{
+  /* —— 浅色（默认）：暖纸底 —— */
+  --paper:#f7f3ea;
+  --paper-2:#f1ebdd;
+  --ink:#2b2620;
+  --ink-soft:#5c554a;
+  --ink-faint:#8a8172;
+  --title-ink:#1f2a44;          /* 蓝黑标题 */
+  --red:#b03a2e;                /* 红笔红：唯一强调色 */
+  --red-soft:rgba(176,58,46,.08);
+  --green-note:rgba(74,124,79,.10);
+  --green-ink:#3f6b44;
+  --line:rgba(43,38,32,.14);
+  --line-strong:rgba(43,38,32,.28);
+  --card:#fbf8f0;
+  --rule:rgba(31,42,68,.06);    /* 索引卡横线纸纹 */
+  --indigo:#3f4b8c;             /* Kimi 靛蓝 */
+  --slate:#7c8b96;              /* DeepSeek 青灰 */
+  --pencil:rgba(43,38,32,.45);
+  --shadow:0 1px 2px rgba(43,38,32,.05),0 4px 14px rgba(43,38,32,.06);
+  --glow-opacity:0;
+  position:relative;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--kd-sans);
+  font-size:14px;
+  line-height:1.65;
+  padding:28px 28px 20px;
+  max-width:1200px;
+  margin:0 auto;
+  transition:background .4s ease,color .4s ease;
+  overflow:hidden;
+}
+.kd-root[data-theme="dark"]{
+  /* —— 深色：深墨蓝灰 + 顶部暖黄光晕 —— */
+  --paper:#1c2130;
+  --paper-2:#232941;
+  --ink:#e8e2d4;
+  --ink-soft:#b3ab99;
+  --ink-faint:#7f7a6c;
+  --title-ink:#d8dfeb;
+  --red:#d4675a;
+  --red-soft:rgba(212,103,90,.12);
+  --green-note:rgba(120,170,125,.14);
+  --green-ink:#8fbc93;
+  --line:rgba(232,226,212,.14);
+  --line-strong:rgba(232,226,212,.30);
+  --card:#242b40;
+  --rule:rgba(232,226,212,.05);
+  --indigo:#8b96d8;
+  --slate:#9fb3bd;
+  --pencil:rgba(232,226,212,.5);
+  --shadow:0 1px 2px rgba(0,0,0,.2),0 4px 14px rgba(0,0,0,.25);
+  --glow-opacity:1;
+}
+/* 台灯光晕（仅深色可见，缓慢呼吸） */
+.kd-root::before{
+  content:"";
+  position:absolute;left:50%;top:-180px;
+  width:720px;height:360px;transform:translateX(-50%);
+  background:radial-gradient(ellipse at center,rgba(255,214,150,.13),transparent 70%);
+  opacity:var(--glow-opacity);
+  animation:kd-breathe 7s ease-in-out infinite;
+  pointer-events:none;
+}
+@keyframes kd-breathe{0%,100%{opacity:calc(var(--glow-opacity)*.6)}50%{opacity:var(--glow-opacity)}}
+@keyframes kd-rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.kd-rise{animation:kd-rise .5s ease both}
+.kd-rise-1{animation-delay:.05s}.kd-rise-2{animation-delay:.12s}.kd-rise-3{animation-delay:.19s}
+.kd-rise-4{animation-delay:.26s}.kd-rise-5{animation-delay:.33s}.kd-rise-6{animation-delay:.40s}
+.kd-rise-7{animation-delay:.47s}.kd-rise-8{animation-delay:.54s}
+
+/* —— 通用排版 —— */
+.kd-root h1,.kd-root h2{font-family:var(--kd-serif);color:var(--title-ink);margin:0;font-weight:700}
+.kd-root h1{font-size:22px;letter-spacing:.04em}
+.kd-root h2{font-size:15px;letter-spacing:.08em;display:flex;align-items:center;gap:10px}
+.kd-root h2::after{content:"";flex:1;height:1px;background:var(--line)}
+.mono{font-family:var(--kd-mono);font-variant-numeric:tabular-nums}
+.kd-section{margin-top:34px;position:relative}
+.kd-muted{color:var(--ink-faint);font-size:12px}
+
+/* —— 主题切换 —— */
+.kd-theme-btn{
+  position:absolute;top:24px;right:28px;z-index:5;
+  border:1px solid var(--line-strong);background:transparent;color:var(--ink-soft);
+  width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:14px;line-height:1;
+  display:flex;align-items:center;justify-content:center;transition:all .25s;
+}
+.kd-theme-btn:hover{color:var(--red);border-color:var(--red)}
+
+/* —— 1. 顶部登记栏 —— */
+.kd-head{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap}
+.kd-head-left{display:flex;gap:14px;align-items:flex-start;min-width:260px}
+.kd-run{margin-top:6px;font-size:12px;color:var(--ink-soft);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.kd-tag{
+  font-family:var(--kd-mono);font-size:11px;color:var(--red);
+  border:1px solid var(--red);border-radius:3px;padding:1px 7px;letter-spacing:.06em;
+}
+.kd-metrics{margin-left:auto;display:flex;gap:26px;align-items:center;flex-wrap:wrap}
+.kd-metric{text-align:right}
+.kd-metric .v{font-family:var(--kd-mono);font-variant-numeric:tabular-nums;font-size:20px;color:var(--title-ink)}
+.kd-metric .k{font-size:11px;color:var(--ink-faint);letter-spacing:.1em;margin-top:2px}
+.kd-progress{width:110px;height:3px;background:var(--line);border-radius:2px;margin-top:6px;overflow:hidden}
+.kd-progress i{display:block;height:100%;background:var(--title-ink);border-radius:2px}
+.kd-donut-wrap{display:flex;align-items:center;gap:10px}
+.kd-legend{font-size:11px;color:var(--ink-soft);line-height:1.8}
+.kd-legend b{font-family:var(--kd-mono);font-weight:500;color:var(--ink)}
+.kd-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+
+/* —— 双模型员工工牌 —— */
+.kd-badges{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.kd-badge{
+  position:relative;display:flex;gap:14px;background:var(--card);
+  border:1px solid var(--line-strong);border-radius:6px;padding:14px 16px 12px;
+  box-shadow:var(--shadow);
+}
+/* 工牌挂孔 */
+.kd-badge::before{
+  content:"";position:absolute;top:-1px;left:50%;transform:translateX(-50%);
+  width:26px;height:7px;border:1px solid var(--line-strong);border-top:none;
+  border-radius:0 0 6px 6px;background:var(--paper);
+}
+.kd-badge .photo{
+  position:relative;width:52px;height:64px;flex:none;border:1px solid var(--line-strong);
+  border-radius:3px;overflow:hidden;background:var(--paper-2);
+  display:flex;align-items:center;justify-content:center;
+}
+.kd-badge .photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:2}
+.kd-badge .photo .ph{
+  font-family:var(--kd-serif);font-size:22px;color:#f7f3ea;
+  width:100%;height:100%;display:flex;align-items:center;justify-content:center;
+}
+.kd-badge.arch .photo .ph{background:var(--indigo)}
+.kd-badge.eng .photo .ph{background:var(--slate)}
+.kd-badge .info{flex:1;min-width:0}
+.kd-badge .nm{font-family:var(--kd-serif);color:var(--title-ink);font-size:14.5px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.kd-badge .no{font-family:var(--kd-mono);font-size:10.5px;color:var(--ink-faint);letter-spacing:.08em}
+.kd-badge .duty{font-size:12px;color:var(--ink-soft);margin-top:2px}
+.kd-badge .work{
+  font-family:var(--kd-mono);font-size:11px;color:var(--ink-soft);margin-top:7px;
+  border-top:1px dashed var(--line);padding-top:7px;line-height:1.9;
+}
+.kd-badge .cost{
+  display:flex;justify-content:space-between;align-items:baseline;margin-top:7px;
+  border-top:1px dashed var(--line);padding-top:7px;
+}
+.kd-badge .cost .v{font-family:var(--kd-mono);font-variant-numeric:tabular-nums;font-size:15px;color:var(--red)}
+.kd-badge .cost .k{font-family:var(--kd-mono);font-size:10.5px;color:var(--ink-faint)}
+.kd-badge .sharebar{height:3px;background:var(--line);border-radius:2px;margin-top:5px;overflow:hidden}
+.kd-badge.arch .sharebar i{display:block;height:100%;background:var(--indigo)}
+.kd-badge.eng .sharebar i{display:block;height:100%;background:var(--slate)}
+@media (max-width:760px){.kd-badges{grid-template-columns:1fr}}
+
+/* —— 2. 产物清单 —— */
+.kd-artifacts{border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.kd-artifact{
+  display:flex;align-items:baseline;gap:14px;padding:9px 2px;
+  border-bottom:1px dashed var(--line);font-family:var(--kd-mono);font-size:13px;
+}
+.kd-artifact:last-child{border-bottom:none}
+.kd-artifact .fname{color:var(--title-ink)}
+.kd-artifact .fsize{color:var(--ink-faint);font-size:12px;font-variant-numeric:tabular-nums}
+.kd-view{
+  margin-left:auto;font-family:var(--kd-sans);font-size:11px;color:var(--ink-faint);
+  border:1px solid var(--line);background:none;border-radius:3px;padding:2px 10px;cursor:pointer;
+  transition:all .2s;
+}
+.kd-view:hover{color:var(--red);border-color:var(--red)}
+
+/* —— 3. 任务看板（四列） —— */
+.kd-board{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+.kd-col-title{
+  font-family:var(--kd-mono);font-size:11px;letter-spacing:.14em;color:var(--ink-faint);
+  padding-bottom:8px;border-bottom:1px solid var(--line-strong);margin-bottom:12px;
+  display:flex;justify-content:space-between;
+}
+.kd-card{
+  position:relative;background:var(--card);border:1px solid var(--line);
+  border-radius:4px;padding:12px 14px;margin-bottom:12px;box-shadow:var(--shadow);
+  background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 23px,var(--rule) 23px,var(--rule) 24px);
+}
+.kd-card .cid{font-family:var(--kd-mono);font-size:11px;color:var(--ink-faint)}
+.kd-card .ct{font-family:var(--kd-serif);color:var(--title-ink);font-size:13.5px;margin:3px 0 8px;line-height:1.5}
+.kd-card .cmeta{font-family:var(--kd-mono);font-size:11px;color:var(--ink-soft);display:flex;gap:12px;flex-wrap:wrap}
+.kd-card.done{border-left:2px solid var(--green-ink)}
+.kd-card.rework{border-left:2px solid var(--red)}
+.kd-card.running{border-left:2px solid var(--indigo)}
+.kd-stamp{
+  position:absolute;top:8px;right:10px;display:flex;align-items:center;gap:4px;
+  color:var(--red);font-size:10px;letter-spacing:.05em;
+}
+.kd-stamp svg{display:block}
+.kd-check-path{stroke-dasharray:26;stroke-dashoffset:26;animation:kd-draw .8s .4s ease forwards}
+@keyframes kd-draw{to{stroke-dashoffset:0}}
+
+/* —— 4. 验收记录 —— */
+.kd-verdict{
+  display:flex;gap:12px;align-items:flex-start;padding:10px 14px;margin-bottom:10px;
+  border-radius:4px;font-size:13px;
+}
+.kd-verdict.pass{background:var(--green-note)}
+.kd-verdict.fail{background:var(--red-soft)}
+.kd-verdict .mark{flex:none;width:20px;text-align:center;font-family:var(--kd-mono);font-size:15px}
+.kd-verdict.pass .mark{color:var(--red)}
+.kd-verdict.fail .mark{color:var(--red);border:1.5px solid var(--red);border-radius:50%;width:22px;height:22px;line-height:19px;font-size:12px;transform:rotate(-6deg)}
+.kd-verdict .cmd{font-family:var(--kd-mono);font-size:12px;color:var(--ink-soft);margin-top:2px;word-break:break-all}
+.kd-verdict .note{font-size:11px;margin-top:3px;color:var(--ink-faint);font-style:italic}
+.kd-verdict.fail .note{color:var(--red)}
+
+/* —— 5. DAG —— */
+.kd-dag{width:100%;display:block}
+.kd-dag .edge{stroke:var(--pencil);stroke-width:1;fill:none;opacity:.7}
+.kd-dag .node-label{font-family:var(--kd-mono);font-size:11px;fill:var(--ink-soft)}
+.kd-dag .node{stroke-width:1.2}
+.kd-dag .n-done{fill:var(--green-note);stroke:var(--green-ink);filter:brightness(1.05)}
+.kd-dag .n-running{fill:transparent;stroke:var(--indigo)}
+.kd-dag .n-rework{fill:transparent;stroke:var(--red);stroke-dasharray:4 3}
+.kd-dag .n-todo{fill:transparent;stroke:var(--line-strong)}
+
+/* —— 6. 运行日志抽屉 —— */
+.kd-drawer-btn{
+  display:flex;align-items:center;gap:8px;width:100%;text-align:left;
+  background:none;border:1px solid var(--line);border-radius:4px;padding:9px 14px;
+  color:var(--ink-soft);font-family:var(--kd-mono);font-size:12px;cursor:pointer;transition:all .2s;
+}
+.kd-drawer-btn:hover{border-color:var(--line-strong);color:var(--ink)}
+.kd-drawer-btn .arrow{transition:transform .25s;margin-left:auto}
+.kd-drawer-btn.open .arrow{transform:rotate(90deg)}
+.kd-logs{display:none;margin-top:10px;border-left:2px solid var(--line);padding:6px 0 6px 16px}
+.kd-logs.open{display:block}
+.kd-log{font-family:var(--kd-mono);font-size:11.5px;color:var(--ink-soft);line-height:2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kd-log .t{color:var(--ink-faint)}
+.kd-log .cid{color:var(--indigo)}
+.kd-root[data-theme="dark"] .kd-log .cid{color:var(--indigo)}
+
+/* —— 7. 发卡台 —— */
+.kd-issue{
+  border:1px solid var(--line-strong);border-radius:6px;padding:18px 20px;background:var(--card);
+  box-shadow:var(--shadow);
+}
+.kd-issue input[type=text]{
+  width:100%;box-sizing:border-box;background:transparent;border:none;border-bottom:1px solid var(--line-strong);
+  font-family:var(--kd-sans);font-size:14px;color:var(--ink);padding:8px 2px;outline:none;
+}
+.kd-issue input[type=text]:focus{border-bottom-color:var(--red)}
+.kd-issue input[type=text]::placeholder{color:var(--ink-faint)}
+.kd-budget{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
+.kd-budget label{
+  display:flex;align-items:center;gap:7px;cursor:pointer;font-size:12.5px;color:var(--ink-soft);
+  border:1px solid var(--line);border-radius:20px;padding:5px 14px;transition:all .2s;user-select:none;
+}
+.kd-budget input{display:none}
+.kd-budget .circle{
+  width:12px;height:12px;border-radius:50%;border:1.5px solid var(--line-strong);flex:none;transition:all .2s;
+}
+.kd-budget input:checked + .circle{border-color:var(--red);background:radial-gradient(circle,var(--red) 40%,transparent 45%)}
+.kd-budget label:has(input:checked){border-color:var(--red);color:var(--ink)}
+.kd-actions{display:flex;gap:10px;flex-wrap:wrap}
+.kd-btn{
+  font-size:12.5px;padding:7px 18px;border-radius:4px;cursor:pointer;transition:all .2s;
+  border:1px solid var(--line-strong);background:transparent;color:var(--ink);
+}
+.kd-btn:hover{border-color:var(--red);color:var(--red)}
+.kd-btn.primary{background:var(--title-ink);border-color:var(--title-ink);color:var(--paper)}
+.kd-btn.primary:hover{background:var(--red);border-color:var(--red);color:#f7f3ea}
+.kd-btn.ghost{margin-left:auto;border-style:dashed;color:var(--ink-soft)}
+
+/* —— 8. 页脚 —— */
+.kd-foot{
+  margin-top:44px;padding-top:14px;border-top:1px solid var(--line);
+  display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;
+}
+.kd-foot .l{font-family:var(--kd-mono);font-size:11px;color:var(--ink-faint)}
+.kd-foot .r{font-family:var(--kd-serif);font-style:italic;font-size:13px;color:var(--ink-soft)}
+
+/* —— Toast —— */
+.kd-toast{
+  position:fixed;left:50%;bottom:30px;transform:translateX(-50%) translateY(20px);
+  background:var(--title-ink);color:var(--paper);font-size:12.5px;padding:9px 20px;border-radius:20px;
+  opacity:0;transition:all .3s;pointer-events:none;z-index:99;box-shadow:var(--shadow);
+}
+.kd-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* —— 响应式 —— */
+@media (max-width:960px){
+  .kd-board{grid-template-columns:repeat(2,1fr)}
+  .kd-metrics{margin-left:0}
+}
+@media (max-width:600px){
+  .kd-board{grid-template-columns:1fr}
+  .kd-root{padding:20px 16px}
+  .kd-btn.ghost{margin-left:0}
+}
+</style>
+</head>
+<body>
+<div class="kd-root" id="kdRoot" data-theme="light">
+  <button class="kd-theme-btn" id="themeBtn" aria-label="切换深浅色">☾</button>
+
+  <!-- 1. 顶部登记栏 -->
+  <header class="kd-head kd-rise kd-rise-1">
+    <div class="kd-head-left">
+      <div>
+        <h1>K-D Agent 工作日志</h1>
+        <div class="kd-run mono"><span id="runId"></span><span class="kd-tag" id="runStatus"></span></div>
+      </div>
+    </div>
+    <div class="kd-metrics" id="metrics"></div>
+  </header>
+
+  <!-- 双模型员工工牌：头像位仍引用 assets/kimi.png / assets/deepseek.png，
+       文件缺失时自动退回纯色首字母占位，替换路径见下方 <img> 注释 -->
+  <section class="kd-section kd-rise kd-rise-2" style="margin-top:24px">
+    <div class="kd-badges" id="badges"></div>
+  </section>
+
+  <!-- 2. 产物清单（结果优先） -->
+  <section class="kd-section kd-rise kd-rise-2">
+    <h2>产物清单</h2>
+    <div class="kd-artifacts" id="artifacts" style="margin-top:12px"></div>
+  </section>
+
+  <!-- 3. 任务看板 -->
+  <section class="kd-section kd-rise kd-rise-3">
+    <h2>任务看板</h2>
+    <div class="kd-board" id="board" style="margin-top:16px"></div>
+  </section>
+
+  <!-- 4. 验收记录（一级可见） -->
+  <section class="kd-section kd-rise kd-rise-4">
+    <h2>验收记录</h2>
+    <div id="verdicts" style="margin-top:14px"></div>
+  </section>
+
+  <!-- 5. 依赖链路 DAG -->
+  <section class="kd-section kd-rise kd-rise-5">
+    <h2>依赖链路</h2>
+    <svg class="kd-dag" id="dag" viewBox="0 0 860 190" style="margin-top:8px"></svg>
+  </section>
+
+  <!-- 6. 运行日志（默认收起） -->
+  <section class="kd-section kd-rise kd-rise-6">
+    <button class="kd-drawer-btn" id="drawerBtn">
+      <span>运行日志</span><span class="kd-muted" id="logCount"></span>
+      <span class="arrow">▸</span>
+    </button>
+    <div class="kd-logs" id="logs"></div>
+  </section>
+
+  <!-- 7. 发卡台（操作区，位置靠后） -->
+  <section class="kd-section kd-rise kd-rise-7">
+    <h2>发卡台</h2>
+    <div class="kd-issue" style="margin-top:14px">
+      <input type="text" id="taskInput" placeholder="描述下一张任务卡的目标与验收标准…">
+      <div class="kd-budget" id="budget"></div>
+      <div class="kd-actions">
+        <button class="kd-btn" id="btnSplit">审批门拆卡</button>
+        <button class="kd-btn primary" id="btnRun">开始执行</button>
+        <button class="kd-btn ghost" id="btnExport">导出简报</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8. 页脚 -->
+  <footer class="kd-foot kd-rise kd-rise-8">
+    <span class="l">KD-001 · built by Wardell</span>
+    <span class="r">Until the sea turns blue.</span>
+  </footer>
+</div>
+
+<div class="kd-toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   示例数据（真实实验数据）——后续接真实管道时只需替换此对象，
+   渲染统一走 render(data) 入口
+   ============================================================ */
+const DATA = {
+  run: { id: "20260820-145851", status: "执行中" },
+  agents: {
+    architect: { name: "Kimi K3", role: "架构师 · 拆任务 / 验收", no: "工号 KD-A01",
+      initial: "K", photo: "assets/kimi.png",  /* 正式照片替换此路径即可 */
+      work: ["拆卡 5 张 · 验收 3 次", "峰值上下文 131,072 tok"],
+      peakContext: "131,072 tok", cost: 0.0385, calls: 4, cls: "arch" },
+    engineer: { name: "DeepSeek V4 Flash", role: "工程师 · 写代码 / 跑命令", no: "工号 KD-E02",
+      initial: "D", photo: "assets/deepseek.png",  /* 正式照片替换此路径即可 */
+      work: ["产物 3 份 · 工具调用 48 次", "缓存命中率 81.3%"],
+      cacheHit: 81.3, cost: 0.6506, calls: 48, cls: "eng" }
+  },
+  billing: { totalCost: 0.6891, totalCalls: 52 },
+  tasks: [
+    { id: "t1",  title: "DSH 总体架构分层调研",     budget: "15 轮", status: "done",    deps: [] },
+    { id: "t2",  title: "DSH 启动链路调研",         budget: "25 轮", status: "rework",  deps: [] },
+    { id: "t2b", title: "DSH 四大子系统源码级深读", budget: "25 轮", status: "running", deps: ["t2"] },
+    { id: "t3",  title: "我方 MVP 编排器源码分析",  budget: "25 轮", status: "done",    deps: [] },
+    { id: "t4",  title: "集成卡：架构对比报告",     budget: "40 轮", status: "todo",
+      deps: ["t1", "t2", "t2b", "t3"] }
+  ],
+  artifacts: [
+    { name: "findings/arch-layers.md", size: "14.6 KB" },
+    { name: "findings/mvp.md",         size: "14.1 KB" },
+    { name: "findings/startup.md",     size: "10.7 KB" }
+  ],
+  verdicts: [
+    { pass: true,  card: "t1",
+      cmd: "test -f findings/arch-layers.md && [ $(stat -c%s findings/arch-layers.md) -gt 2000 ]",
+      note: "findings/arch-layers.md 存在且大小 > 2000 字节" },
+    { pass: false, card: "t2b",
+      cmd: "test -f findings/subsystems.md",
+      note: "产物 findings/subsystems.md 不存在（FileNotFoundError）→ 退回返工" },
+    { pass: true,  card: "t3",
+      cmd: "test -f findings/mvp.md && grep -q 'orchestrator' findings/mvp.md",
+      note: "findings/mvp.md 存在，关键章节齐备" }
+  ],
+  logs: [
+    { t: "14:58:51", cid: "—",  text: "run 20260820-145851 初始化，预算档位：架构师自主" },
+    { t: "14:59:02", cid: "t1", text: "read_file({\"path\": \"dsh/README.md\"})" },
+    { t: "14:59:47", cid: "t1", text: "grep({\"pattern\": \"class .*Layer\", \"path\": \"dsh/src\"})" },
+    { t: "15:00:12", cid: "t1", text: "write_file({\"path\": \"findings/arch-layers.md\"…})" },
+    { t: "15:00:13", cid: "t1", text: "verify: arch-layers.md > 2000 bytes ✓ 已物理验收" },
+    { t: "15:00:20", cid: "t2", text: "read_file({\"path\": \"dsh/cmd/main.go\"})" },
+    { t: "15:00:48", cid: "t3", text: "write_file({\"path\": \"findings/mvp.md\"…})" },
+    { t: "15:01:31", cid: "t2b", text: "verify: findings/subsystems.md ✗ FileNotFoundError，退回返工" },
+    { t: "15:01:58", cid: "t2b", text: "read_file({\"path\": \"dsh/internal/subsys\"…}) · 重读中" }
+  ],
+  budgets: ["轻量 15 轮", "中档 25 轮", "重型 40 轮", "架构师自主"]
+};
+
+/* ============================================================
+   数据管道适配：MVP 快照契约（export_state.py）→ 本页数据模型
+   快照形态: { run, task, totals{cards,done,escalated,cost_cny,llm_calls},
+              roles[{role,model,calls,tokens,cost,cache_hit,prompt,peak_prompt,cache_rate}],
+              cards[{id,title,status,owner,budget,depends_on}],
+              events[{ts,type,card,...}], artifacts[{path,size}] }
+   ============================================================ */
+const esc = s => String(s ?? "").replace(/[&<>"]/g,
+  m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
+const fmtSize = b => b < 1024 ? b + " B" : (b / 1024).toFixed(1) + " KB";
+
+function adapt(snap){
+  if (!snap || !snap.totals) return null;
+  const t = snap.totals, ev = snap.events || [];
+  const arch = (snap.roles || []).find(r => r.role === "architect") || {};
+  const eng  = (snap.roles || []).find(r => r.role === "engineer")  || {};
+  const reviews = ev.filter(e => e.type === "review").length;
+  const toolCalls = ev.filter(e => e.type === "tool").length;
+  const status = (t.escalated || 0) > 0 ? "需人工介入"
+    : t.cards > 0 && t.done === t.cards ? "全部通过"
+    : (snap.cards || []).some(c => c.status === "doing") ? "执行中" : "待派发";
+  return {
+    run: { id: snap.run, status },
+    agents: {
+      architect: { name: "Kimi K3", role: "架构师 · 拆任务 / 验收", no: "工号 KD-A01",
+        initial: "K", photo: "assets/kimi.png",
+        work: [`拆卡 ${t.cards} 张 · 验收 ${reviews} 次`,
+               `峰值上下文 ${(arch.peak_prompt || 0).toLocaleString()} tok`],
+        cost: arch.cost || 0, calls: arch.calls || 0, cls: "arch" },
+      engineer: { name: "DeepSeek V4 Flash", role: "工程师 · 写代码 / 跑命令", no: "工号 KD-E02",
+        initial: "D", photo: "assets/deepseek.png",
+        work: [`产物 ${(snap.artifacts || []).length} 份 · 工具调用 ${toolCalls} 次`,
+               `缓存命中率 ${((eng.cache_rate || 0) * 100).toFixed(1)}%`],
+        cacheHit: +(((eng.cache_rate || 0) * 100).toFixed(1)),
+        cost: eng.cost || 0, calls: eng.calls || 0, cls: "eng" }
+    },
+    billing: { totalCost: t.cost_cny || 0, totalCalls: t.llm_calls || 0 },
+    tasks: (snap.cards || []).map(c => ({
+      id: esc(c.id), title: esc(c.title), budget: `${c.budget || 12} 轮`,
+      status: c.status === "doing" ? "running" : c.status,
+      deps: (c.depends_on || []).map(esc)
+    })),
+    artifacts: (snap.artifacts || []).map(a => ({
+      name: esc(String(a.path).replace(/\\/g, "/")), size: fmtSize(a.size || 0)
+    })),
+    verdicts: ev.filter(e => e.type === "verify").slice(-10).map(e => ({
+      pass: !!e.passed, card: esc(e.card || "-"),
+      cmd: esc(e.check || ""), note: esc((e.output || "").slice(0, 140)) ||
+        (e.passed ? "验收命令执行通过" : "验收命令执行失败")
+    })),
+    logs: ev.filter(e => e.type !== "verify").slice(-30).map(e => ({
+      t: esc(e.ts || ""), cid: esc(e.card || "—"),
+      text: e.type === "tool" ? esc(`${e.tool}(${(e.args || "").slice(0, 60)})`)
+        : e.type === "engineer_status" ? esc(`${e.status} · ${(e.summary || "").slice(0, 50)}`)
+        : e.type === "review" ? `${e.verdict === "pass" ? "✓ 通过" : "✗ 返工"} · ${esc((e.reason || "").slice(0, 50))}`
+        : e.type === "dispatch" ? `派发（依赖 ${esc(e.depends_on || "无")}）`
+        : `卡片状态 → ${esc(e.status || "")}`
+    })),
+    budgets: ["轻量 15 轮", "中档 25 轮", "重型 40 轮", "架构师自主"]
+  };
+}
+
+/* —— 小工具 —— */
+const $ = s => document.querySelector(s);
+const yen = n => "¥" + n.toFixed(4);
+let toastTimer;
+function toast(msg){
+  const el = $("#toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2400);
+}
+
+/* —— 统一渲染入口（硬性要求：后续接真实数据管道） —— */
+function render(data){
+  /* 登记栏 */
+  $("#runId").textContent = "run " + data.run.id;
+  $("#runStatus").textContent = data.run.status;
+  const done = data.tasks.filter(t => t.status === "done").length;
+  const total = data.tasks.length;
+  const a = data.agents.architect, e = data.agents.engineer;
+  const aPct = (a.cost / data.billing.totalCost * 100).toFixed(1);
+  const ePct = (e.cost / data.billing.totalCost * 100).toFixed(1);
+
+  $("#metrics").innerHTML = `
+    <div class="kd-metric">
+      <div class="v">${done}<span style="font-size:13px;color:var(--ink-faint)"> / ${total}</span></div>
+      <div class="kd-progress"><i style="width:${done/total*100}%"></i></div>
+      <div class="k">任务进度</div>
+    </div>
+    <div class="kd-metric"><div class="v">${yen(data.billing.totalCost)}</div><div class="k">本次成本</div></div>
+    <div class="kd-metric"><div class="v">${data.billing.totalCalls}</div><div class="k">LLM 调用</div></div>
+    <div class="kd-donut-wrap">
+      ${donutSVG(a.cost, e.cost)}
+      <div class="kd-legend">
+        <div><span class="kd-dot" style="background:var(--indigo)"></span>Kimi <b>${aPct}%</b></div>
+        <div><span class="kd-dot" style="background:var(--slate)"></span>DeepSeek <b>${ePct}%</b></div>
+      </div>
+    </div>`;
+
+  /* 双模型员工工牌 */
+  $("#badges").innerHTML = [a, e].map(g => {
+    const pct = (g.cost / data.billing.totalCost * 100).toFixed(1);
+    return `<div class="kd-badge ${g.cls}">
+      <div class="photo">
+        <div class="ph">${g.initial}</div>
+        <img src="${g.photo}" alt="${g.name}" onerror="this.remove()">
+      </div>
+      <div class="info">
+        <div class="nm">${g.name}<span class="no">${g.no}</span></div>
+        <div class="duty">${g.role}</div>
+        <div class="work">${g.work.join("<br>")}</div>
+        <div class="cost">
+          <span class="k">本次成本 · ${g.calls} 次调用</span>
+          <span class="v">${yen(g.cost)}</span>
+        </div>
+        <div class="sharebar"><i style="width:${pct}%"></i></div>
+      </div>
+    </div>`;
+  }).join("");
+
+  /* 产物清单 */
+  $("#artifacts").innerHTML = data.artifacts.map(f => `
+    <div class="kd-artifact">
+      <span class="fname">${f.name}</span>
+      <span class="fsize">${f.size}</span>
+      <button class="kd-view" data-name="${f.name}">查看</button>
+    </div>`).join("");
+  document.querySelectorAll(".kd-view").forEach(b =>
+    b.addEventListener("click", () => toast("演示模式：产物预览暂未接入 · " + b.dataset.name)));
+
+  /* 任务看板 */
+  const cols = [
+    { key: "todo",    label: "待办" },
+    { key: "running", label: "执行中" },
+    { key: "rework",  label: "返工介入" },
+    { key: "done",    label: "已完成" }
+  ];
+  $("#board").innerHTML = cols.map(c => {
+    const list = data.tasks.filter(t => t.status === c.key);
+    return `<div><div class="kd-col-title"><span>${c.label}</span><span>${list.length}</span></div>
+      ${list.map(cardHTML).join("")}</div>`;
+  }).join("");
+
+  /* 验收记录 */
+  $("#verdicts").innerHTML = data.verdicts.map(v => `
+    <div class="kd-verdict ${v.pass ? "pass" : "fail"}">
+      <span class="mark">${v.pass ? checkSVG() : "✗"}</span>
+      <div>
+        <div><span class="mono" style="color:var(--ink-faint);font-size:11px">[${v.card}]</span>
+          ${v.pass ? "验收通过" : "验收失败"}</div>
+        <div class="cmd">$ ${v.cmd}</div>
+        <div class="note">${v.pass ? "批注：" : "圈注："}${v.note}</div>
+      </div>
+    </div>`).join("");
+
+  /* DAG */
+  renderDAG(data.tasks);
+
+  /* 运行日志 */
+  $("#logCount").textContent = data.logs.length + " 条";
+  $("#logs").innerHTML = data.logs.map(l =>
+    `<div class="kd-log"><span class="t">${l.t}</span> <span class="cid">[${l.cid}]</span> ${l.text}</div>`
+  ).join("");
+
+  /* 预算档位 */
+  $("#budget").innerHTML = data.budgets.map((b, i) => `
+    <label><input type="radio" name="budget" value="${b}" ${i === 3 ? "checked" : ""}>
+      <span class="circle"></span>${b}</label>`).join("");
+}
+
+function cardHTML(t){
+  const stamp = t.status === "done"
+    ? `<span class="kd-stamp">${checkSVG(14)}<span>已物理验收</span></span>` : "";
+  const deps = t.deps.length ? `<span>← ${t.deps.join(", ")}</span>` : "";
+  return `<div class="kd-card ${t.status}">${stamp}
+    <div class="cid">${t.id}</div>
+    <div class="ct">${t.title}</div>
+    <div class="cmeta"><span>预算 ${t.budget}</span>${deps}</div>
+  </div>`;
+}
+
+function checkSVG(size){
+  size = size || 16;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 20 20">
+    <path class="kd-check-path" d="M3 11 L8 16 L17 5" fill="none" stroke="var(--red)"
+      stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+/* 双模型成本环形图（纯 SVG，Kimi 靛蓝 / DeepSeek 青灰） */
+function donutSVG(c1, c2){
+  const r = 26, C = 2 * Math.PI * r;
+  const p1 = c1 / (c1 + c2);
+  return `<svg width="64" height="64" viewBox="0 0 64 64">
+    <circle cx="32" cy="32" r="${r}" fill="none" stroke="var(--slate)" stroke-width="7"/>
+    <circle cx="32" cy="32" r="${r}" fill="none" stroke="var(--indigo)" stroke-width="7"
+      stroke-dasharray="${(p1 * C).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 32 32)"/>
+    <text x="32" y="36" text-anchor="middle" font-size="11" fill="var(--ink)"
+      font-family="var(--kd-mono)">${(p1*100).toFixed(0)}%</text>
+  </svg>`;
+}
+
+/* 依赖链路：铅笔稿细线 DAG（位置按依赖深度动态分层，兼容任意卡 id） */
+function renderDAG(tasks){
+  const ids = new Set(tasks.map(t => t.id));
+  const depth = {};
+  const dep = id => {
+    if (depth[id] != null) return depth[id];
+    const t = tasks.find(x => x.id === id);
+    const ds = (t && t.deps || []).filter(d => ids.has(d));
+    return depth[id] = ds.length ? Math.max(...ds.map(dep)) + 1 : 0;
+  };
+  tasks.forEach(t => dep(t.id));
+  const perRow = {};
+  const pos = {};
+  tasks.forEach(t => {
+    const d = depth[t.id];
+    perRow[d] = (perRow[d] || 0);
+    pos[t.id] = [120 + d * 210, 50 + perRow[d]++ * 64];
+  });
+  const cls = { done:"n-done", running:"n-running", rework:"n-rework", todo:"n-todo" };
+  let edges = "", nodes = "";
+  tasks.forEach(t => t.deps.forEach(d => {
+    if (!pos[d]) return;
+    const [x1,y1] = pos[d], [x2,y2] = pos[t.id];
+    edges += `<path class="edge" d="M ${x1} ${y1+16} C ${x1} ${y1+50}, ${x2} ${y2-46}, ${x2} ${y2-16}"
+      marker-end="url(#kdArrow)"/>`;
+  }));
+  tasks.forEach(t => {
+    const [x,y] = pos[t.id];
+    nodes += `<g>
+      <circle class="node ${cls[t.status] || "n-todo"}" cx="${x}" cy="${y}" r="16"/>
+      <text class="node-label" x="${x}" y="${y+34}" text-anchor="middle">${t.id}</text>
+    </g>`;
+  });
+  $("#dag").innerHTML = `
+    <defs><marker id="kdArrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+      <path d="M0,0 L7,3.5 L0,7" fill="none" stroke="var(--pencil)" stroke-width="1"/>
+    </marker></defs>${edges}${nodes}`;
+}
+
+/* —— 交互 —— */
+let currentData = DATA;   // 当前渲染的数据（导出简信用）
+
+$("#themeBtn").addEventListener("click", () => {
+  const root = $("#kdRoot");
+  const dark = root.dataset.theme === "dark";
+  root.dataset.theme = dark ? "light" : "dark";
+  $("#themeBtn").textContent = dark ? "☾" : "☀";
+});
+$("#drawerBtn").addEventListener("click", () => {
+  $("#drawerBtn").classList.toggle("open");
+  $("#logs").classList.toggle("open");
+});
+
+function selectedBudget(){
+  const b = document.querySelector("input[name=budget]:checked");
+  if (!b) return 0;
+  const m = b.value.match(/\d+/);           // "轻量 15 轮" → 15；架构师自主 → 0
+  return m ? +m[0] : 0;
+}
+function launch(mode){
+  const task = $("#taskInput").value.trim();
+  if (!task){ toast("请先描述任务目标"); return; }
+  const payload = { task, budget: selectedBudget(), mode };
+  if (window.DaimonWidget && window.DaimonWidget.emit){
+    window.DaimonWidget.saveInput({ task, budget: payload.budget, mode });
+    window.DaimonWidget.emit("submit", payload);
+    toast(mode === "gate" ? "已派发：架构师拆卡中（审批门）…" : "已派发：任务开始执行…");
+  } else {
+    toast("当前为静态预览：请在 Kimi 看板中使用发卡");
+  }
+}
+$("#btnSplit").addEventListener("click", () => launch("gate"));
+$("#btnRun").addEventListener("click", () => launch("direct"));
+$("#btnExport").addEventListener("click", () => {
+  const md = buildBrief(currentData);
+  try {
+    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "kd-agent-brief-" + DATA.run.id + ".md";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast("简报已导出（演示数据）");
+  } catch (err) { toast("当前环境不支持直接下载"); }
+});
+
+function buildBrief(d){
+  const lines = [
+    "# K-D Agent 工作简报", "",
+    "- run: `" + d.run.id + "`（" + d.run.status + "）",
+    "- 任务进度: " + d.tasks.filter(t=>t.status==="done").length + " / " + d.tasks.length,
+    "- 总成本: " + yen(d.billing.totalCost) + " · LLM 调用 " + d.billing.totalCalls + " 次",
+    "- 架构师 " + d.agents.architect.name + ": " + yen(d.agents.architect.cost) + "（" + d.agents.architect.calls + " 次）",
+    "- 工程师 " + d.agents.engineer.name + ": " + yen(d.agents.engineer.cost) + "（" + d.agents.engineer.calls + " 次，缓存命中率 " + d.agents.engineer.cacheHit + "%）",
+    "", "## 任务卡", ""
+  ];
+  d.tasks.forEach(t => lines.push("- [" + t.id + "] " + t.title + " — " + t.status +
+    (t.deps.length ? "（依赖 " + t.deps.join(", ") + "）" : "")));
+  lines.push("", "## 验收记录", "");
+  d.verdicts.forEach(v => lines.push("- " + (v.pass ? "✓" : "✗") + " [" + v.card + "] " + v.note));
+  lines.push("", "## 产物", "");
+  d.artifacts.forEach(f => lines.push("- `" + f.name + "`（" + f.size + "）"));
+  lines.push("", "---", "KD-001 · built by Wardell");
+  return lines.join("\n");
+}
+
+/* 启动：优先渲染数据管道推送的真实快照，无数据时退回示例数据 */
+function boot(snap){
+  const d = adapt(snap) || DATA;
+  currentData = d;
+  render(d);
+}
+boot(window.DaimonWidget && window.DaimonWidget.data && window.DaimonWidget.data.main);
+if (window.DaimonWidget && window.DaimonWidget.onDataChange){
+  window.DaimonWidget.onDataChange(d => { if (d && d.main) boot(d.main); });
+}
+</script>
+</body>
+</html>
