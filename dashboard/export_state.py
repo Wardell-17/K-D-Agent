@@ -45,7 +45,12 @@ def export(run_name: str | None = None) -> dict:
     run_dir = next((r for r in runs if r.name == run_name), runs[0]) if run_name else runs[0]
     cards = reader.load_cards(run_dir)
     cost = reader.load_cost(run_dir)
-    events = reader.load_events(run_dir)
+    events_all = reader.load_events(run_dir)
+    # 事件窗口策略：验收/评审事件是证据本体，单独保量（各留 25 条），
+    # 其余高频事件（tool 等）留最近 35 条——防止 verify 被刷出窗口导致验收记录空白
+    key_events = [e for e in events_all if e.get("type") in ("verify", "review")][-25:]
+    other_events = [e for e in events_all if e.get("type") not in ("verify", "review")][-35:]
+    events = sorted(key_events + other_events, key=lambda e: e.get("ts", ""))
     files = reader.workspace_files(run_dir)
     ws = run_dir / "workspace"
     report_path = run_dir / "report.json"
@@ -71,7 +76,7 @@ def export(run_name: str | None = None) -> dict:
             "owner": c["owner"], "budget": c["budget"], "depends_on": c["depends_on"],
             "notes": c["notes"][-3:],
         } for c in cards],
-        "events": events[-40:],
+        "events": events,
         "artifacts": [{"path": str(f.relative_to(ws)), "size": f.stat().st_size}
                       for f in files[:30]],
     }

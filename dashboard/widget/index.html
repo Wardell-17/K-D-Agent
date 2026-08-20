@@ -587,8 +587,11 @@ function render(data){
       ${list.map(cardHTML).join("")}</div>`;
   }).join("");
 
-  /* 验收记录 */
-  $("#verdicts").innerHTML = data.verdicts.map(v => `
+  /* 验收记录（默认仅最近 3 条，可展开全部） */
+  const vs = data.verdicts || [];
+  const expanded = $("#verdicts").dataset.expanded === "1";
+  const shown = expanded ? vs : vs.slice(-3);
+  $("#verdicts").innerHTML = shown.map(v => `
     <div class="kd-verdict ${v.pass ? "pass" : "fail"}">
       <span class="mark">${v.pass ? checkSVG() : "✗"}</span>
       <div>
@@ -597,7 +600,14 @@ function render(data){
         <div class="cmd">$ ${v.cmd}</div>
         <div class="note">${v.pass ? "批注：" : "圈注："}${v.note}</div>
       </div>
-    </div>`).join("");
+    </div>`).join("") +
+    (vs.length > 3 ? `<button class="kd-view" id="verdictToggle" style="margin:4px 0 0 2px">
+      ${expanded ? "收起" : `展开全部 ${vs.length} 条`}</button>` : "");
+  const vt = $("#verdictToggle");
+  if (vt) vt.addEventListener("click", () => {
+    $("#verdicts").dataset.expanded = expanded ? "0" : "1";
+    render(currentData);
+  });
 
   /* DAG */
   renderDAG(data.tasks);
@@ -678,7 +688,11 @@ function renderDAG(tasks){
       <text class="node-label" x="${x}" y="${y+34}" text-anchor="middle">${t.id}</text>
     </g>`;
   });
-  $("#dag").innerHTML = `
+  const svg = $("#dag");
+  const maxX = Math.max(...Object.values(pos).map(p => p[0]), 200) + 80;
+  const maxY = Math.max(...Object.values(pos).map(p => p[1]), 60) + 60;
+  svg.setAttribute("viewBox", `0 0 ${maxX} ${maxY}`);   // 视口随节点数自适应，防裁切
+  svg.innerHTML = `
     <defs><marker id="kdArrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
       <path d="M0,0 L7,3.5 L0,7" fill="none" stroke="var(--pencil)" stroke-width="1"/>
     </marker></defs>${edges}${nodes}`;
