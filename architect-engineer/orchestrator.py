@@ -712,7 +712,10 @@ class Orchestrator:
                             artifact_refs=list(packet.artifact_refs),
                             created=time.strftime("%Y-%m-%dT%H:%M:%S"),
                             updated=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                            depends_on=list(packet.depends_on))
+                            depends_on=list(packet.depends_on),
+                            # 架构师的预算决策落卡（非默认档才写 frontmatter），
+                            # 保证 --plan-only 审卡可见、--cards 重载不丢（Gemini 审出）
+                            budget=packet.remaining_budget if packet.remaining_budget != 12 else 0)
             card.save(self.tasks_dir)
             self.cards[packet.task_id] = card
             packets[packet.task_id] = (packet, card)

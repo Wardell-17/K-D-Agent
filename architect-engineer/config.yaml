@@ -71,6 +71,10 @@ engineer_tools:
     - "del\\s+/[fsq]"
     - "format\\s"
     - "git\\s+push"
+    # 禁止绕过 web_search 直接抓网页（审计旁路：无去重/记账/落盘纪律，Gemini 审出）
+    # 下载仓库走 git clone，不在此限
+    - "curl\\s"
+    - "wget\\s"
 
   # 只读的额外根目录（实验 015：工程师 read_file/list_dir 可读工作目录之外的
   # 指定目录，用于"读外部源码仓库"类任务；写入仍严格限于工作目录）
