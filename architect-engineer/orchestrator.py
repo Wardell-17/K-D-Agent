@@ -87,18 +87,34 @@ class CostTracker:
 
 
 # ---------------------------------------------------------------------------
-# 模型客户端（OpenAI 兼容；两家只是配置不同）
+# 模型客户端（OpenAI 兼容；各 provider 只是配置不同）
+# 实验 019：模型档案（models）与角色（roles）解耦——LLM 按档案名实例化，
+# 成本记账仍记角色名，换模型只改 config.yaml 不动代码。
 # ---------------------------------------------------------------------------
 class LLM:
-    def __init__(self, name: str, tracker: CostTracker):
-        cfg = CONFIG["models"][name]
+    def __init__(self, profile: str, tracker: CostTracker, role: str | None = None):
+        cfg = CONFIG["models"][profile]
         key = os.environ.get(cfg["api_key_env"])
         if not key:
             raise RuntimeError(f"缺少环境变量 {cfg['api_key_env']}，请先设置 API key")
-        self.name, self.cfg = name, cfg
+        self.name = role or profile          # 账本按角色名归集
+        self.profile, self.cfg = profile, cfg
         self.client = OpenAI(api_key=key, base_url=cfg["base_url"], timeout=300.0,
                              default_headers=cfg.get("headers") or None)
         self.tracker = tracker
+
+    @classmethod
+    def for_role(cls, role: str, tracker: "CostTracker") -> "LLM":
+        """按角色解析模型档案（roles 注册表）；兼容旧版 config（models 直接含角色名）。"""
+        prof = (CONFIG.get("roles") or {}).get(role, {}).get("model_profile")
+        if not prof:
+            if role in CONFIG["models"]:
+                prof = role                  # 旧版配置直通
+            else:
+                raise RuntimeError(f"角色 '{role}' 未在 roles 注册表中登记模型档案")
+        if prof not in CONFIG["models"]:
+            raise RuntimeError(f"角色 '{role}' 指向的模型档案 '{prof}' 不在 models 库中")
+        return cls(prof, tracker, role=role)
 
     def chat(self, messages: list[dict], tools: list[dict] | None = None):
         kwargs = dict(model=self.cfg["model"], messages=messages,
@@ -653,8 +669,8 @@ class Orchestrator:
         self.tasks_dir.mkdir(exist_ok=True)
         self.cards: dict[str, TaskCard] = {}
         self.tracker = CostTracker(self.run_dir / "cost.jsonl")
-        self.architect = LLM("architect", self.tracker)
-        self.engineer = LLM("engineer", self.tracker)
+        self.architect = LLM.for_role("architect", self.tracker)
+        self.engineer = LLM.for_role("engineer", self.tracker)
 
     def log_handoff(self, name: str, payload: dict):
         (self.run_dir / "handoffs" / name).write_text(

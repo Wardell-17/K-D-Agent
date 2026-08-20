@@ -6,14 +6,14 @@
 #   Kimi:     https://platform.kimi.com/docs/pricing
 # ============================================================
 
-models:
-  architect:                 # 规划 / 验收 / 长上下文与多模态任务
+models:                      # 模型档案库：可注册任意多个，key 为档案名
+  kimi-k3:                   # 规划 / 验收 / 长上下文与多模态任务
     provider: kimi
     model: k3                # Kimi Code 端点的模型 ID（不是 kimi-k3）
     base_url: https://api.kimi.com/coding/v1
     headers: {User-Agent: "KimiCLI/1.0"}   # coding 端点要求编程 Agent 标识
     # 注意：此 key 为 Kimi Code 订阅，按订阅额度计费而非按 token，
-    # 成本日志中 architect 行的金额为估算值，仅供数量级参考
+    # 成本日志中该档案的金额为估算值，仅供数量级参考
     api_key_env: KIMI_API_KEY
     price:                   # TODO: 按 platform.kimi.com 当前价格填写
       input_hit: 4.0
@@ -21,7 +21,7 @@ models:
       output: 16.0
     max_tokens: 8192
 
-  engineer:                  # 高频执行：读写文件 / 跑命令 / 迭代修复
+  deepseek-v4-flash:         # 高频执行：读写文件 / 跑命令 / 迭代修复
     provider: deepseek
     model: deepseek-chat     # 当前指向 V4-Flash 正式版；可在官方文档确认
     base_url: https://api.deepseek.com
@@ -33,6 +33,14 @@ models:
       # 注：此处取高峰价（保守上限）；精确峰谷计价见 compare/analyze_session.py
       # 2026-08-17 前旧价为 0.2/1.0/2.0，历史运行记录的成本按旧价理解
     max_tokens: 8192
+
+# 角色注册表（实验 019：角色与模型解耦——加角色/换模型只改这里，不动代码）
+# 新模型发布时：在 models 里加一条新档案，再把角色的 model_profile 指过去即可
+roles:
+  architect:                 # 规划 / 验收 / 多模态
+    model_profile: kimi-k3
+  engineer:                  # 高频执行
+    model_profile: deepseek-v4-flash
 
 # 失败升级策略：工程师连续失败 N 轮后，把该子任务升级给架构师亲自处理
 escalation:
