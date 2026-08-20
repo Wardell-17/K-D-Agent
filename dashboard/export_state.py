@@ -47,7 +47,13 @@ def export(run_name: str | None = None) -> dict:
     # 只拆了卡未执行的 plan-only run 不占主视图，进待审批收件箱
     if not run_name:
         for r in runs:
-            if (r / "report.json").exists():
+            rp = r / "report.json"
+            if rp.exists():
+                try:
+                    if json.loads(rp.read_text(encoding="utf-8")).get("discarded"):
+                        continue          # 废弃 run 不进主视图
+                except Exception:
+                    pass
                 run_dir = r
                 break
             cs = reader.load_cards(r)
