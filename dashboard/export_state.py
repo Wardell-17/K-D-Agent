@@ -38,10 +38,29 @@ def load_role_stats(run_dir: Path) -> list[dict]:
     return list(by_role.values())
 
 
+def _is_discarded(r: Path) -> bool:
+    rp = r / "report.json"
+    if not rp.exists():
+        return False
+    try:
+        return bool(json.loads(rp.read_text(encoding="utf-8")).get("discarded"))
+    except Exception:
+        return False
+
+
 def export(run_name: str | None = None) -> dict:
     runs = reader.list_runs()
     if not runs:
         return {"error": "没有任何 run"}
+    # 累计总账：全部 run 的 cost.jsonl 加总（含废弃 run——钱已经花了，账要认）
+    lifetime = {"cost_cny": 0.0, "llm_calls": 0, "runs": len(runs)}
+    for r in runs:
+        c = reader.load_cost(r)
+        lifetime["cost_cny"] += c["total"]
+        lifetime["llm_calls"] += sum(v["calls"] for v in c["by_role"].values())
+    lifetime["cost_cny"] = round(lifetime["cost_cny"], 4)
+    # run 切换器列表（最近 15 个，标注废弃）
+    runs_list = [{"name": r.name, "discarded": _is_discarded(r)} for r in runs[:15]]
     run_dir = next((r for r in runs if r.name == run_name), runs[0]) if run_name else runs[0]
     # 主视图 run 选择：优先"有实质内容"的 run（有报告/有成本/有事件），
     # 只拆了卡未执行的 plan-only run 不占主视图，进待审批收件箱
@@ -107,6 +126,8 @@ def export(run_name: str | None = None) -> dict:
         } for c in cards],
         "events": events,
         "pending_approvals": pending_approvals,
+        "lifetime": lifetime,
+        "runs_list": runs_list,
         "artifacts": [{"path": str(f.relative_to(ws)), "size": f.stat().st_size}
                       for f in files[:30]],
     }

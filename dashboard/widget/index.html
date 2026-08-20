@@ -318,7 +318,14 @@
     <div class="kd-head-left">
       <div>
         <h1>K-D Agent 工作日志</h1>
-        <div class="kd-run mono"><span id="runId"></span><span class="kd-tag" id="runStatus"></span></div>
+        <div class="kd-run mono">
+          <select id="runSel" class="mono" style="border:1px solid var(--line);background:transparent;color:var(--ink-soft);border-radius:3px;padding:1px 4px;font-size:11px"></select>
+          <span class="kd-tag" id="runStatus"></span>
+        </div>
+        <div class="kd-muted mono" id="lifeLine" style="margin-top:4px"></div>
+        <div id="newRunBar" style="display:none;margin-top:6px">
+          <button class="kd-view" id="newRunBtn"></button>
+        </div>
       </div>
     </div>
     <div class="kd-metrics" id="metrics"></div>
@@ -507,6 +514,8 @@ function adapt(snap){
         : `卡片状态 → ${esc(e.status || "")}`
     })),
     budgets: ["轻量 15 轮", "中档 25 轮", "重型 40 轮", "架构师自主"],
+    lifetime: snap.lifetime || null,
+    runsList: (snap.runs_list || []).map(r => ({ name: esc(r.name), discarded: !!r.discarded })),
     pending: (snap.pending_approvals || []).map(p => ({
       run: esc(p.run),
       cards: (p.cards || []).map(c => ({ id: esc(c.id), title: esc(c.title), budget: c.budget || 12 }))
@@ -529,8 +538,14 @@ function toast(msg){
 /* —— 统一渲染入口（硬性要求：后续接真实数据管道） —— */
 function render(data){
   /* 登记栏 */
-  $("#runId").textContent = "run " + data.run.id;
+  const sel = $("#runSel");
+  const runs = data.runsList && data.runsList.length ? data.runsList : [{ name: data.run.id }];
+  sel.innerHTML = runs.map(r =>
+    `<option value="${r.name}" ${r.name === data.run.id ? "selected" : ""}>run ${r.name}${r.discarded ? "（已废弃）" : ""}</option>`).join("");
   $("#runStatus").textContent = data.run.status;
+  $("#lifeLine").textContent = data.lifetime
+    ? `累计 ¥${data.lifetime.cost_cny.toFixed(4)} · ${data.lifetime.runs} runs · ${data.lifetime.llm_calls} 次调用`
+    : "";
   const done = data.tasks.filter(t => t.status === "done").length;
   const total = data.tasks.length;
   const a = data.agents.architect, e = data.agents.engineer;
@@ -543,8 +558,8 @@ function render(data){
       <div class="kd-progress"><i style="width:${done/total*100}%"></i></div>
       <div class="k">任务进度</div>
     </div>
-    <div class="kd-metric"><div class="v">${yen(data.billing.totalCost)}</div><div class="k">本次成本</div></div>
-    <div class="kd-metric"><div class="v">${data.billing.totalCalls}</div><div class="k">LLM 调用</div></div>
+    <div class="kd-metric"><div class="v">${yen(data.billing.totalCost)}</div><div class="k">本 run 成本</div></div>
+    <div class="kd-metric"><div class="v">${data.billing.totalCalls}</div><div class="k">本 run 调用</div></div>
     <div class="kd-donut-wrap">
       ${donutSVG(a.cost, e.cost)}
       <div class="kd-legend">
@@ -762,7 +777,8 @@ function launch(mode){
   if (window.DaimonWidget && window.DaimonWidget.emit){
     window.DaimonWidget.saveInput({ task, budget: payload.budget, mode });
     window.DaimonWidget.emit("submit", payload);
-    toast(mode === "gate" ? "已派发：架构师拆卡中，稍后到「待审批」放行" : "已派发：任务开始执行，数据管道稍后刷新");
+    displayedRun = null;   // 发卡后解除钉住：主视图自动跟随即将诞生的新 run
+    toast(mode === "gate" ? "已派发：架构师拆卡中，稍后到「待审批」放行" : "已派发：任务开始执行，30 秒内自动刷新");
     launchCooldown = true;
     $("#btnRun").disabled = $("#btnSplit").disabled = true;
     $("#btnRun").style.opacity = $("#btnSplit").style.opacity = .45;
@@ -811,11 +827,45 @@ function buildBrief(d){
 }
 
 /* 启动：优先渲染数据管道推送的真实快照，无数据时退回示例数据 */
+let displayedRun = null;    // 钉住的 run：新 run 出现只提示，不抢屏
+let latestSeen = null;
+
 function boot(snap){
   const d = adapt(snap) || DATA;
+  latestSeen = d.run.id;
+  if (!displayedRun) displayedRun = d.run.id;
+  if (d.run.id !== displayedRun){
+    // 主视图钉住不动，弹条提示有新 run
+    const bar = $("#newRunBar");
+    bar.style.display = "";
+    $("#newRunBtn").textContent = `检测到新 run ${d.run.id}，点击切换`;
+    return;
+  }
+  $("#newRunBar").style.display = "none";
   currentData = d;
   render(d);
 }
+
+function requestRun(name){
+  window.DaimonWidget?.emit("submit", { action: "view", run: name || displayedRun || "" });
+}
+
+$("#newRunBtn").addEventListener("click", () => {
+  displayedRun = latestSeen;
+  requestRun(displayedRun);
+});
+$("#runSel").addEventListener("change", e => {
+  displayedRun = e.target.value;
+  requestRun(displayedRun);
+});
+
+/* 30 秒心跳：自动拉取当前钉住 run 的最新快照，进度条自己往前走 */
+setInterval(() => {
+  if (document.visibilityState === "visible" && window.DaimonWidget?.emit){
+    requestRun(displayedRun);
+  }
+}, 30000);
+
 boot(window.DaimonWidget && window.DaimonWidget.data && window.DaimonWidget.data.main);
 if (window.DaimonWidget && window.DaimonWidget.onDataChange){
   window.DaimonWidget.onDataChange(d => { if (d && d.main) boot(d.main); });
