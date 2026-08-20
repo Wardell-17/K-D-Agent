@@ -330,6 +330,12 @@
     <div class="kd-badges" id="badges"></div>
   </section>
 
+  <!-- 待审批收件箱（审批门拆的卡在此等待放行，无待审批时隐藏） -->
+  <section class="kd-section" id="inboxSec" style="display:none;margin-top:24px">
+    <h2>待审批 <span class="kd-muted" id="inboxCount"></span></h2>
+    <div id="inbox" style="margin-top:12px"></div>
+  </section>
+
   <!-- 2. 产物清单（结果优先） -->
   <section class="kd-section kd-rise kd-rise-2">
     <h2>产物清单</h2>
@@ -500,7 +506,11 @@ function adapt(snap){
         : e.type === "dispatch" ? `派发（依赖 ${esc(e.depends_on || "无")}）`
         : `卡片状态 → ${esc(e.status || "")}`
     })),
-    budgets: ["轻量 15 轮", "中档 25 轮", "重型 40 轮", "架构师自主"]
+    budgets: ["轻量 15 轮", "中档 25 轮", "重型 40 轮", "架构师自主"],
+    pending: (snap.pending_approvals || []).map(p => ({
+      run: esc(p.run),
+      cards: (p.cards || []).map(c => ({ id: esc(c.id), title: esc(c.title), budget: c.budget || 12 }))
+    }))
   };
 }
 
@@ -563,6 +573,31 @@ function render(data){
       </div>
     </div>`;
   }).join("");
+
+  /* 待审批收件箱 */
+  const pend = data.pending || [];
+  $("#inboxSec").style.display = pend.length ? "" : "none";
+  $("#inboxCount").textContent = pend.length ? `${pend.length} 盒待放行` : "";
+  $("#inbox").innerHTML = pend.map(p => `
+    <div class="kd-issue" style="margin-bottom:14px">
+      <div class="mono" style="font-size:11px;color:var(--ink-faint)">run ${p.run} · 架构师已拆卡，等你审阅</div>
+      ${p.cards.map(c => `<div style="display:flex;gap:10px;align-items:baseline;margin-top:8px;font-size:13px">
+        <span class="mono" style="color:var(--ink-faint);font-size:11px">${c.id}</span>
+        <span style="font-family:var(--kd-serif);color:var(--title-ink)">${c.title}</span>
+        <span class="kd-muted mono" style="margin-left:auto">预算 ${c.budget} 轮</span></div>`).join("")}
+      <div class="kd-actions" style="margin-top:12px">
+        <button class="kd-btn primary kd-approve" data-run="${p.run}">✓ 放行执行</button>
+        <button class="kd-btn kd-discard" data-run="${p.run}">废弃</button>
+      </div>
+    </div>`).join("");
+  document.querySelectorAll(".kd-approve").forEach(b => b.addEventListener("click", () => {
+    window.DaimonWidget?.emit("submit", { action: "approve", run: b.dataset.run });
+    toast(`已放行 run ${b.dataset.run}，编排器启动`);
+  }));
+  document.querySelectorAll(".kd-discard").forEach(b => b.addEventListener("click", () => {
+    window.DaimonWidget?.emit("submit", { action: "discard", run: b.dataset.run });
+    toast(`已废弃 run ${b.dataset.run}`);
+  }));
 
   /* 产物清单 */
   $("#artifacts").innerHTML = data.artifacts.map(f => `
@@ -718,14 +753,24 @@ function selectedBudget(){
   const m = b.value.match(/\d+/);           // "轻量 15 轮" → 15；架构师自主 → 0
   return m ? +m[0] : 0;
 }
+let launchCooldown = false;
 function launch(mode){
   const task = $("#taskInput").value.trim();
   if (!task){ toast("请先描述任务目标"); return; }
-  const payload = { task, budget: selectedBudget(), mode };
+  if (launchCooldown){ toast("刚派发过一单，30 秒冷却中（防重复起 run）"); return; }
+  const payload = { action: "launch", task, budget: selectedBudget(), mode };
   if (window.DaimonWidget && window.DaimonWidget.emit){
     window.DaimonWidget.saveInput({ task, budget: payload.budget, mode });
     window.DaimonWidget.emit("submit", payload);
-    toast(mode === "gate" ? "已派发：架构师拆卡中（审批门）…" : "已派发：任务开始执行…");
+    toast(mode === "gate" ? "已派发：架构师拆卡中，稍后到「待审批」放行" : "已派发：任务开始执行，数据管道稍后刷新");
+    launchCooldown = true;
+    $("#btnRun").disabled = $("#btnSplit").disabled = true;
+    $("#btnRun").style.opacity = $("#btnSplit").style.opacity = .45;
+    setTimeout(() => {
+      launchCooldown = false;
+      $("#btnRun").disabled = $("#btnSplit").disabled = false;
+      $("#btnRun").style.opacity = $("#btnSplit").style.opacity = 1;
+    }, 30000);
   } else {
     toast("当前为静态预览：请在 Kimi 看板中使用发卡");
   }

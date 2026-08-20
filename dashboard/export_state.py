@@ -43,6 +43,29 @@ def export(run_name: str | None = None) -> dict:
     if not runs:
         return {"error": "没有任何 run"}
     run_dir = next((r for r in runs if r.name == run_name), runs[0]) if run_name else runs[0]
+    # 主视图 run 选择：优先"有实质内容"的 run（有报告/有成本/有事件），
+    # 只拆了卡未执行的 plan-only run 不占主视图，进待审批收件箱
+    if not run_name:
+        for r in runs:
+            if (r / "report.json").exists():
+                run_dir = r
+                break
+            cs = reader.load_cards(r)
+            if any(c["status"] != "todo" for c in cs):   # 执行中的 run（尚未出报告）
+                run_dir = r
+                break
+    # 待审批收件箱：最近 10 个 run 中，无 report.json（未执行/未废弃）且卡全为 todo 的
+    pending_approvals = []
+    for r in runs[:10]:
+        if r == run_dir or (r / "report.json").exists():
+            continue
+        cs = reader.load_cards(r)
+        if cs and all(c["status"] == "todo" for c in cs):
+            pending_approvals.append({
+                "run": r.name,
+                "cards": [{"id": c["id"], "title": c["title"], "budget": c["budget"]}
+                          for c in cs],
+            })
     cards = reader.load_cards(run_dir)
     cost = reader.load_cost(run_dir)
     events_all = reader.load_events(run_dir)
@@ -77,6 +100,7 @@ def export(run_name: str | None = None) -> dict:
             "notes": c["notes"][-3:],
         } for c in cards],
         "events": events,
+        "pending_approvals": pending_approvals,
         "artifacts": [{"path": str(f.relative_to(ws)), "size": f.stat().st_size}
                       for f in files[:30]],
     }
