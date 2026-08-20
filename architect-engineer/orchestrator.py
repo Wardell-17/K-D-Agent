@@ -87,6 +87,24 @@ class CostTracker:
 
 
 # ---------------------------------------------------------------------------
+# 事件流（实验 021：看板数据源——工具调用/卡片状态/验收结果实时落盘，事件溯源）
+# ---------------------------------------------------------------------------
+class EventLog:
+    """追加写 run 目录下的 events.jsonl；仪表盘按行读取渲染。故障安全：写失败不拖垮主流程。"""
+
+    def __init__(self, path: Path):
+        self.path = path
+
+    def emit(self, etype: str, card: str = "", **kw):
+        try:
+            rec = {"ts": time.strftime("%H:%M:%S"), "type": etype, "card": card, **kw}
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # 模型客户端（OpenAI 兼容；各 provider 只是配置不同）
 # 实验 019：模型档案（models）与角色（roles）解耦——LLM 按档案名实例化，
 # 成本记账仍记角色名，换模型只改 config.yaml 不动代码。
@@ -413,6 +431,8 @@ class Toolbox:
         self.deny = [re.compile(p) for p in ecfg["command_deny_patterns"]]
         self.search_history: set[str] = set()   # 查询去重，防烧检索额度
         self.written: list[str] = []            # 实际写过的文件（供预算耗尽时取证）
+        self.events: EventLog | None = None     # 实验 021：看板事件流（可选挂载）
+        self.card_id: str = ""
 
     def _safe(self, rel: str) -> Path:
         p = (self.workdir / rel).resolve()
@@ -481,6 +501,9 @@ class Toolbox:
 
     def execute(self, name: str, args: dict) -> str:
         self.count(name)
+        if self.events:  # 调用即记录（不论成败），供看板"执行心跳"区渲染
+            brief = json.dumps(args, ensure_ascii=False)
+            self.events.emit("tool", self.card_id, tool=name, args=brief[:80])
         try:
             if name == "read_file":
                 full = self._safe_read(args["path"]).read_text(encoding="utf-8")
@@ -564,8 +587,10 @@ def role_prompt(role: str, key: str, fallback: str) -> str:
 
 def run_engineer(packet: HandoffPacket, workdir: Path, llm: LLM,
                  search_backend: str = "", system_prompt: str | None = None,
-                 allowed_tools: list[str] | None = None) -> dict:
+                 allowed_tools: list[str] | None = None,
+                 events: EventLog | None = None, card_id: str = "") -> dict:
     tb = Toolbox(workdir, allowed_tools=allowed_tools)
+    tb.events, tb.card_id = events, card_id
     if search_backend:   # 任务卡级路由覆盖全局默认（实验 014：后端可插拔）
         tb.search_backend = search_backend
     messages = [
@@ -685,6 +710,7 @@ class Orchestrator:
         self.tasks_dir.mkdir(exist_ok=True)
         self.cards: dict[str, TaskCard] = {}
         self.tracker = CostTracker(self.run_dir / "cost.jsonl")
+        self.events = EventLog(self.run_dir / "events.jsonl")   # 实验 021：看板事件流
         self.architect = LLM.for_role("architect", self.tracker)
         self.engineer = LLM.for_role("engineer", self.tracker)
 
@@ -718,6 +744,7 @@ class Orchestrator:
                             budget=packet.remaining_budget if packet.remaining_budget != 12 else 0)
             card.save(self.tasks_dir)
             self.cards[packet.task_id] = card
+            self.events.emit("card_status", packet.task_id, status="todo", owner="architect")
             packets[packet.task_id] = (packet, card)
             print(f"\n--- 子任务 {packet.task_id}: {packet.goal[:60]}"
                   + (f"（依赖: {', '.join(packet.depends_on)}）" if packet.depends_on else ""))
@@ -752,6 +779,8 @@ class Orchestrator:
                         continue  # 有失败依赖的留给下面冻结逻辑
                     packet, card = pending.pop(tid)
                     futures[pool.submit(self._execute_packet, packet, card)] = tid
+                    self.events.emit("dispatch", tid,
+                                     depends_on=",".join(packet.depends_on) or "无")
                 # 2. 冻结：有依赖失败的卡不执行，直接升级人工
                 for tid in [t for t, (p, c) in pending.items()
                             if any(d in failed for d in p.depends_on)]:
@@ -760,6 +789,8 @@ class Orchestrator:
                     card.notes.append("前置任务失败/升级，本卡冻结: "
                                       + ", ".join(d for d in packet.depends_on if d in failed))
                     card.save(self.tasks_dir)
+                    self.events.emit("card_status", tid, status="escalated", owner="human",
+                                     reason="前置失败冻结")
                     results.append({"task_id": tid, "verdict": "escalated",
                                     "reason": "前置任务失败，依赖链冻结"})
                     failed.add(tid)
@@ -837,12 +868,16 @@ class Orchestrator:
             # 2. 工程师执行（卡片状态置 doing）
             card.touch(status="doing", owner="engineer")
             card.save(self.tasks_dir)
+            self.events.emit("card_status", packet.task_id, status="doing", owner="engineer")
             eng = run_engineer(packet, self.workdir, self.engineer,
                                search_backend=card.search_backend,
                                system_prompt=role_prompt("engineer", "prompt", ENGINEER_SYS),
                                allowed_tools=(CONFIG.get("roles") or {})
-                                             .get("engineer", {}).get("tools"))
+                                             .get("engineer", {}).get("tools"),
+                               events=self.events, card_id=packet.task_id)
             print(f"[engineer] {eng['status']}: {eng['summary'][:80]}")
+            self.events.emit("engineer_status", packet.task_id, status=eng["status"],
+                             summary=eng["summary"][:200])
             # 结构化回报写入卡片
             card.report = (f"状态: {eng['status']}\n\n{eng['summary']}\n\n"
                            f"工具调用: {json.dumps(eng.get('tool_calls', {}), ensure_ascii=False)}")
@@ -850,6 +885,9 @@ class Orchestrator:
             card.save(self.tasks_dir)
             # 3. 验证器跑真实检查（产出新信息——执行证据）
             ver = verify(packet, self.workdir)
+            for ev in ver["evidence"]:   # 验证法庭：每条验收命令的真实结果
+                self.events.emit("verify", packet.task_id, check=ev["check"][:120],
+                                 passed=ev["passed"], output=ev["output"][:200])
             # 4. 架构师基于证据验收（审核者读独立证据，而非只听提议者自述）
             review_payload = {
                 "packet": asdict(packet), "engineer_report": eng,
@@ -865,11 +903,14 @@ class Orchestrator:
                 review_payload, ensure_ascii=False))
             self.log_handoff(f"{packet.task_id}-review.json",
                              {"engineer": eng, "verification": ver, "review": review})
+            self.events.emit("review", packet.task_id, verdict=review.get("verdict", "?"),
+                             reason=review.get("reason", "")[:200])
             if review.get("verdict") == "pass" and ver["all_passed"]:
                 print(f"[architect] ✓ 通过: {review.get('reason', '')[:80]}")
                 card.touch(status="done")
                 card.notes.append("验收通过: " + review.get("reason", ""))
                 card.save(self.tasks_dir)
+                self.events.emit("card_status", packet.task_id, status="done", owner="")
                 return {"task_id": packet.task_id, "review": review}
             failures += 1
             print(f"[architect] ✗ 返工({failures}): {review.get('fix_instructions', '')[:80]}")
@@ -878,12 +919,14 @@ class Orchestrator:
                 card.touch(status="escalated", owner="human")
                 card.notes.append("连续返工超限，升级人工: " + review.get("fix_instructions", ""))
                 card.save(self.tasks_dir)
+                self.events.emit("card_status", packet.task_id, status="escalated", owner="human")
                 return {"task_id": packet.task_id, "verdict": "escalated",
                         "reason": "连续返工超限，需人工介入", "last_review": review}
             # 返工：修复指令写入移交包 + 追加进卡片备注，预算收紧
             card.touch(status="rework")
             card.notes.append(f"返工({failures}): " + review.get("fix_instructions", ""))
             card.save(self.tasks_dir)
+            self.events.emit("card_status", packet.task_id, status="rework", owner="architect")
             packet.confirmed_facts.append("上次返工原因: " + review.get("fix_instructions", ""))
             packet.remaining_budget = max(packet.remaining_budget // 2, 4)
 
