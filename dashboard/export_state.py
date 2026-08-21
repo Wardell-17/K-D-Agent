@@ -128,9 +128,67 @@ def export(run_name: str | None = None) -> dict:
         "pending_approvals": pending_approvals,
         "lifetime": lifetime,
         "runs_list": runs_list,
-        "artifacts": [{"path": str(f.relative_to(ws)), "size": f.stat().st_size}
-                      for f in files[:30]],
+        "artifacts": _collect_artifacts(run_dir, ws, files, events_all),
     }
+
+
+def _inline_text(p: Path, limit: int = 6000):
+    """小文本文件内联进快照，供看板点击预览（沙箱 iframe 读不到本地文件）"""
+    try:
+        if p.stat().st_size > 512 * 1024:
+            return None
+        raw = p.read_bytes()
+        if b"\x00" in raw[:4096]:
+            return None  # 二进制不内联
+        return raw.decode("utf-8", errors="replace")[:limit]
+    except Exception:
+        return None
+
+
+def _collect_artifacts(run_dir: Path, ws: Path, files, events_all):
+    arts = []
+    # 1) workspace 内文件：过滤 <64B 的噪音（工程师手滑重定向产物）
+    for f in files[:30]:
+        size = f.stat().st_size
+        if size < 64:
+            continue
+        arts.append({"path": str(f.relative_to(ws)), "size": size,
+                     "external": False, "content": _inline_text(f)})
+    # 2) 外部产物：从事件流 write_file 的绝对路径里捞终稿（写在 workspace 外的交付物）
+    seen = {str(a["path"]).lower() for a in arts}
+    import re
+    for e in events_all:
+        if e.get("type") != "tool" or e.get("tool") != "write_file":
+            continue
+        raw = e.get("args") or ""
+        try:
+            p_str = json.loads(raw).get("path", "")
+        except Exception:
+            # 日志 args 被截断导致 JSON 不完整 → 正则抢救 path 字段（含 JSON 转义）
+            m = re.search(r'"path"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+            if not m:
+                continue
+            try:
+                p_str = json.loads('"' + m.group(1) + '"')
+            except Exception:
+                continue
+        if not p_str:
+            continue
+        p = Path(p_str)
+        if not p.is_absolute() or not p.is_file():
+            continue
+        try:
+            p.relative_to(ws)  # workspace 内的上面已收
+            continue
+        except ValueError:
+            pass
+        key = str(p).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        arts.append({"path": str(p), "size": p.stat().st_size,
+                     "external": True, "content": _inline_text(p)})
+    return arts
 
 
 if __name__ == "__main__":
