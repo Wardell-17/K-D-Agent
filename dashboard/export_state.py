@@ -69,6 +69,25 @@ def export(run_name: str | None = None) -> dict:
     lifetime["valid_cost"] = round(lifetime["valid_cost"], 4)
     lifetime["avg_cost"] = round(lifetime["valid_cost"] / lifetime["valid_runs"], 4) \
         if lifetime["valid_runs"] else 0.0
+    # 分层基线（T-shirt sizing）：以单 run 内最高卡预算反推复杂度
+    #   S ≤15 轮（极简/单命令）  M 16–25 轮（单文件/中模块）  L >25 轮（跨文件/多节点）
+    tiers = {"S": {"n": 0, "cost": 0.0}, "M": {"n": 0, "cost": 0.0}, "L": {"n": 0, "cost": 0.0}}
+    for r in runs:
+        if _is_discarded(r):
+            continue
+        c = reader.load_cost(r)
+        if c["total"] <= 0:
+            continue  # 没产生调用的空 run 不进基线
+        try:
+            peak = max((cd["budget"] for cd in reader.load_cards(r)), default=0)
+        except Exception:
+            peak = 0
+        tier = "L" if peak > 25 else ("M" if peak > 15 else "S")
+        tiers[tier]["n"] += 1
+        tiers[tier]["cost"] += c["total"]
+    lifetime["tiers"] = {k: {"n": v["n"],
+                             "avg": round(v["cost"] / v["n"], 4) if v["n"] else 0.0}
+                         for k, v in tiers.items()}
     # run 切换器列表（最近 15 个，标注废弃）
     runs_list = [{"name": r.name, "discarded": _is_discarded(r)} for r in runs[:15]]
     run_dir = next((r for r in runs if r.name == run_name), runs[0]) if run_name else runs[0]

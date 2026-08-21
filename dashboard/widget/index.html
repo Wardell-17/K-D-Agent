@@ -320,6 +320,7 @@
           <span class="kd-tag" id="runStatus"></span>
         </div>
         <div class="kd-muted mono" id="lifeLine" style="margin-top:4px"></div>
+        <div class="kd-muted mono" id="tierLine" style="margin-top:2px;font-size:11px;color:var(--ink-faint)"></div>
         <div id="newRunBar" style="display:none;margin-top:6px">
           <button class="kd-view" id="newRunBtn"></button>
         </div>
@@ -556,6 +557,10 @@ function render(data){
   const lt = data.lifetime;
   $("#lifeLine").textContent = lt
     ? `累计 ¥${(lt.cost_cny || 0).toFixed(4)}（${lt.runs} runs，含废弃 ${lt.discarded_runs ?? 0}）· 有效 ${lt.valid_runs ?? lt.runs} 单 · 平均 ¥${(lt.avg_cost ?? 0).toFixed(4)}/单`
+    : "";
+  $("#tierLine").textContent = (lt && lt.tiers)
+    ? ["S", "M", "L"].filter(k => lt.tiers[k] && lt.tiers[k].n > 0)
+        .map(k => `${k} 级 ×${lt.tiers[k].n} · 均 ¥${lt.tiers[k].avg.toFixed(3)}`).join("　|　")
     : "";
   const done = data.tasks.filter(t => t.status === "done").length;
   const total = data.tasks.length;
