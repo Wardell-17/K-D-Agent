@@ -535,7 +535,7 @@ function adapt(snap){
         : e.type === "dispatch" ? `派发（依赖 ${esc(e.depends_on || "无")}）`
         : `卡片状态 → ${esc(e.status || "")}`
     })),
-    budgets: ["轻量 15 轮", "中档 25 轮", "重型 40 轮", "架构师自主"],
+    budgets: ["S 轻量 15 轮", "M/L 标准 25 轮（024/025 推荐档）", "深读 40 轮", "架构师自主（推荐）"],
     lifetime: snap.lifetime || null,
     runsList: (snap.runs_list || []).map(r => ({ name: esc(r.name), discarded: !!r.discarded })),
     pending: (snap.pending_approvals || []).map(p => ({

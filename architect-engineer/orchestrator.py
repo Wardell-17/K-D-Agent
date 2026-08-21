@@ -596,7 +596,11 @@ def run_engineer(packet: HandoffPacket, workdir: Path, llm: LLM,
         tb.search_backend = search_backend
     messages = [
         {"role": "system", "content": system_prompt or ENGINEER_SYS},
-        {"role": "user", "content": "任务移交包：\n" + json.dumps(asdict(packet), ensure_ascii=False, indent=2)},
+        # 缓存纪律（024 缓存分析）：packet 剔除 remaining_budget——它每轮递减会击穿
+        # KV 前缀缓存；预算展示由末尾状态栏承担（动态内容沉底），前缀保持绝对静态
+        {"role": "user", "content": "任务移交包：\n" + json.dumps(
+            {k: v for k, v in asdict(packet).items() if k != "remaining_budget"},
+            ensure_ascii=False, indent=2)},
     ]
     budget = packet.remaining_budget
     text_only_streak = 0
