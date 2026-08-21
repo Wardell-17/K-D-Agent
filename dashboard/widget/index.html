@@ -876,6 +876,10 @@ function boot(snap){
 function requestRun(name){
   window.DaimonWidget?.emit("submit", { action: "view", run: name || displayedRun || "" });
 }
+function requestLatest(){
+  // 拉“最新有效 run”快照：用于发现新 run（钉住时只弹提示条，不抢屏）
+  window.DaimonWidget?.emit("submit", { action: "view", run: "" });
+}
 
 $("#newRunBtn").addEventListener("click", () => {
   displayedRun = latestSeen;
@@ -890,10 +894,11 @@ $("#runSel").addEventListener("change", e => {
   requestRun(displayedRun);
 });
 
-/* 30 秒心跳：自动拉取当前钉住 run 的最新快照，进度条自己往前走 */
+/* 30 秒心跳：拉最新快照——钉住的 run 在跑时等于自身刷新；
+   出现更新的 run 时弹提示条，由用户决定何时切过去 */
 setInterval(() => {
   if (document.visibilityState === "visible" && window.DaimonWidget?.emit){
-    requestRun(displayedRun);
+    requestLatest();
   }
 }, 30000);
 
