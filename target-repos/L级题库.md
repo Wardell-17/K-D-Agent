@@ -16,19 +16,19 @@
 目标仓库在 D:\agent-project\target-repos\Quadcopter_SimCon（Python，四旋翼仿真，
 控制代码参考 PX4 架构）。任务分两层，必须都完成：
 
-【分析层】逆向梳理 Simulation/ 目录下的控制链路，输出 workspace/control_architecture.md，
+【分析层】逆向梳理 Simulation/ 目录下的控制链路，输出 control_architecture.md（当前目录即产物区，不要加 workspace/ 前缀），
 必须包含：位置环→速度环→姿态环→角速率环的串级结构说明、每级对应的源码文件与函数名
 （精确到 ctrl.py / trajectory.py / utils/mixer.py 等具体路径）、控制量如何从期望位置
 一路变换到四个电机转速的完整链路。
 
-【集成层】编写 workspace/verify_cascade.py 脚本，真实导入 Simulation/ctrl.py 与相关模块，
+【集成层】编写 verify_cascade.py 脚本（当前目录），真实导入 Simulation/ctrl.py 与相关模块，
 用合成状态量驱动控制链，数值验证串级结构：给定期望位置，断言控制链输出
 (1) 总推力为有限正数 (2) 期望力矩三分量均为有限数 (3) 经 mixer 分配后四个电机
 指令均在物理约束内。脚本退出码必须为 0。
 
 验收：
-!C:\Python314\python.exe workspace/verify_cascade.py
-!C:\Python314\python.exe -c "c=open('workspace/control_architecture.md',encoding='utf-8').read(); assert 'ctrl.py' in c and 'mixer' in c and '串级' in c; print('OK')"
+!C:\Python314\python.exe verify_cascade.py
+!C:\Python314\python.exe -c "c=open('control_architecture.md',encoding='utf-8').read(); assert 'ctrl.py' in c and 'mixer' in c and '串级' in c; print('OK')"
 
 背景约束：工作目录是 architect-engineer/，仓库路径要写绝对路径；
 所有 python 命令必须用 C:\Python314\python.exe 全路径（管道环境 PATH 里另有托管 Python，缺 numpy/pytest）；

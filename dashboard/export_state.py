@@ -69,8 +69,8 @@ def export(run_name: str | None = None) -> dict:
     lifetime["valid_cost"] = round(lifetime["valid_cost"], 4)
     lifetime["avg_cost"] = round(lifetime["valid_cost"] / lifetime["valid_runs"], 4) \
         if lifetime["valid_runs"] else 0.0
-    # 分层基线（T-shirt sizing）：以单 run 内最高卡预算反推复杂度
-    #   S ≤15 轮（极简/单命令）  M 16–25 轮（单文件/中模块）  L >25 轮（跨文件/多节点）
+    # 分层基线（T-shirt sizing）：复杂度 = 预算档位 × 拆卡数
+    #   L：最高卡预算 ≥25 且 ≥2 张卡（跨模块多卡协作）  M：预算 >15 的其余  S：≤15
     tiers = {"S": {"n": 0, "cost": 0.0}, "M": {"n": 0, "cost": 0.0}, "L": {"n": 0, "cost": 0.0}}
     for r in runs:
         if _is_discarded(r):
@@ -79,10 +79,11 @@ def export(run_name: str | None = None) -> dict:
         if c["total"] <= 0:
             continue  # 没产生调用的空 run 不进基线
         try:
-            peak = max((cd["budget"] for cd in reader.load_cards(r)), default=0)
+            cards = reader.load_cards(r)
+            peak = max((cd["budget"] for cd in cards), default=0)
         except Exception:
-            peak = 0
-        tier = "L" if peak > 25 else ("M" if peak > 15 else "S")
+            cards, peak = [], 0
+        tier = "L" if (peak >= 25 and len(cards) >= 2) else ("M" if peak > 15 else "S")
         tiers[tier]["n"] += 1
         tiers[tier]["cost"] += c["total"]
     lifetime["tiers"] = {k: {"n": v["n"],
