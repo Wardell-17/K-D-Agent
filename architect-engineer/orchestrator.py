@@ -202,7 +202,8 @@ class TaskCard:
 
     def render(self) -> str:
         def esc(s: str) -> str:
-            return s.replace('"', "'").replace("\n", " ")
+            # YAML 双引号标量：反斜杠是转义符（\a \p 等会炸 ScannerError），必须先转义
+            return s.replace("\\", "\\\\").replace('"', "'").replace("\n", " ")
         deps = "[" + ", ".join(f'"{esc(d)}"' for d in self.depends_on) + "]"
         fm = [f'id: "{esc(self.task_id)}"', f'title: "{esc(self.title)}"',
               f'status: "{self.status}"', f'owner: "{self.owner}"',
