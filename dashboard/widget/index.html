@@ -341,6 +341,17 @@
     <div id="inbox" style="margin-top:12px"></div>
   </section>
 
+  <!-- 人工介入处置台（有 escalated 卡时出现） -->
+  <section class="kd-section" id="escSec" style="display:none;margin-top:24px;border-color:var(--red)">
+    <h2 style="color:var(--red)">⚠ 需人工介入 <span class="kd-muted" id="escCount"></span></h2>
+    <div id="escBox" style="margin-top:12px"></div>
+    <div class="kd-actions" style="margin-top:12px">
+      <button class="kd-btn primary" id="escResolve">✓ 我已核实，人工验收通过</button>
+      <button class="kd-btn" id="escRetry">↻ 重置卡片，重新执行（会再消耗 token）</button>
+      <button class="kd-btn" id="escDiscard" style="color:var(--red);border-color:var(--red)">废弃本 run</button>
+    </div>
+  </section>
+
   <!-- 2. 产物清单（结果优先） -->
   <section class="kd-section kd-rise kd-rise-2">
     <h2>产物清单</h2>
@@ -531,7 +542,13 @@ function adapt(snap){
       run: esc(p.run), tier: esc(p.tier || ""), tierReason: esc(p.tier_reason || ""),
       cards: (p.cards || []).map(c => ({ id: esc(c.id), title: esc(c.title), budget: c.budget || 12 }))
     })),
-    blocked: (snap.launched && snap.launched.blocked) ? esc(snap.launched.message || "已有进行中的任务") : null
+    blocked: (snap.launched && snap.launched.blocked) ? esc(snap.launched.message || "已有进行中的任务") : null,
+    escalated: (snap.cards || []).filter(c => c.status === "escalated").map(c => {
+      const revs = (snap.events || []).filter(e => e.type === "review" && e.card === c.id);
+      const last = revs[revs.length - 1];
+      return { id: esc(c.id), title: esc(c.title),
+               reason: esc(((last && last.reason) || "架构师多次返工未通过").slice(0, 220)) };
+    })
   };
 }
 
@@ -631,6 +648,33 @@ function render(data){
     window.DaimonWidget?.emit("submit", { action: "discard", run: b.dataset.run });
     toast(`已废弃 run ${b.dataset.run}`);
   }));
+
+  /* 人工介入处置台 */
+  const esc = data.escalated || [];
+  $("#escSec").style.display = esc.length ? "" : "none";
+  $("#escCount").textContent = esc.length ? `${esc.length} 张卡升级` : "";
+  $("#escBox").innerHTML = esc.map(c => `
+    <div class="kd-issue" style="margin-bottom:10px">
+      <div style="display:flex;gap:10px;align-items:baseline;font-size:13px">
+        <span class="mono" style="color:var(--ink-faint);font-size:11px">${c.id}</span>
+        <span style="font-family:var(--kd-serif);color:var(--title-ink)">${c.title}</span>
+      </div>
+      <div class="kd-muted" style="margin-top:6px;font-size:12px;line-height:1.6">最后评审：${c.reason}</div>
+    </div>`).join("");
+  if (esc.length){
+    $("#escResolve").onclick = () => {
+      window.DaimonWidget?.emit("submit", { action: "resolve", run: data.run.id });
+      toast("已按人工验收通过结案，留痕 human-override");
+    };
+    $("#escRetry").onclick = () => {
+      window.DaimonWidget?.emit("submit", { action: "retry", run: data.run.id });
+      toast("已重置升级卡片，编排器重新执行");
+    };
+    $("#escDiscard").onclick = () => {
+      window.DaimonWidget?.emit("submit", { action: "discard", run: data.run.id });
+      toast(`已废弃 run ${data.run.id}`);
+    };
+  }
 
   /* 产物清单 */
   $("#artifacts").innerHTML = data.artifacts.map((f, i) => `
