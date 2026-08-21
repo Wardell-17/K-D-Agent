@@ -931,13 +931,19 @@ class Orchestrator:
                 self.events.emit("card_status", packet.task_id, status="escalated", owner="human")
                 return {"task_id": packet.task_id, "verdict": "escalated",
                         "reason": "连续返工超限，需人工介入", "last_review": review}
-            # 返工：修复指令写入移交包 + 追加进卡片备注，预算收紧
+            # 返工：修复指令写入移交包 + 追加进卡片备注
             card.touch(status="rework")
             card.notes.append(f"返工({failures}): " + review.get("fix_instructions", ""))
             card.save(self.tasks_dir)
             self.events.emit("card_status", packet.task_id, status="rework", owner="architect")
             packet.confirmed_facts.append("上次返工原因: " + review.get("fix_instructions", ""))
-            packet.remaining_budget = max(packet.remaining_budget // 2, 4)
+            # 实验 025 教训：返工轮是全新上下文，重读仓库会烧光预算——
+            # ① 预算不再减半（15→7→4 等于判死刑），成本护栏由返工次数上限承担
+            # ② 注入返工纪律：禁止从零重新探索，先读已有产物再按修复指令直奔主题
+            packet.confirmed_facts.append(
+                "返工纪律（最高优先级）：你是返工轮，禁止从零重新探索仓库——"
+                "list_dir/read_file 合计不超过 3 次。先读本卡的「返工与备注」和"
+                "artifact_refs 中已有的侦察/前轮产物，然后直接按修复指令修改并跑验收命令自查。")
 
     def _finish(self, results: list) -> dict:
         report = {"task": self.task, "results": results,
