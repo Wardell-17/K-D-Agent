@@ -553,8 +553,9 @@ function render(data){
   sel.innerHTML = runs.map(r =>
     `<option value="${r.name}" ${r.name === data.run.id ? "selected" : ""}>run ${r.name}${r.discarded ? "（已废弃）" : ""}</option>`).join("");
   $("#runStatus").textContent = data.run.status;
-  $("#lifeLine").textContent = data.lifetime
-    ? `累计 ¥${data.lifetime.cost_cny.toFixed(4)} · ${data.lifetime.runs} runs · ${data.lifetime.llm_calls} 次调用`
+  const lt = data.lifetime;
+  $("#lifeLine").textContent = lt
+    ? `累计 ¥${(lt.cost_cny || 0).toFixed(4)}（${lt.runs} runs，含废弃 ${lt.discarded_runs ?? 0}）· 有效 ${lt.valid_runs ?? lt.runs} 单 · 平均 ¥${(lt.avg_cost ?? 0).toFixed(4)}/单`
     : "";
   const done = data.tasks.filter(t => t.status === "done").length;
   const total = data.tasks.length;

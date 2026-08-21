@@ -53,12 +53,22 @@ def export(run_name: str | None = None) -> dict:
     if not runs:
         return {"error": "没有任何 run"}
     # 累计总账：全部 run 的 cost.jsonl 加总（含废弃 run——钱已经花了，账要认）
-    lifetime = {"cost_cny": 0.0, "llm_calls": 0, "runs": len(runs)}
+    # 同时给出"有效口径"：未废弃 run 的单数与平均每单成本（汇报/简历可用）
+    lifetime = {"cost_cny": 0.0, "llm_calls": 0, "runs": len(runs),
+                "valid_runs": 0, "valid_cost": 0.0, "discarded_runs": 0}
     for r in runs:
         c = reader.load_cost(r)
         lifetime["cost_cny"] += c["total"]
         lifetime["llm_calls"] += sum(v["calls"] for v in c["by_role"].values())
+        if _is_discarded(r):
+            lifetime["discarded_runs"] += 1
+        else:
+            lifetime["valid_runs"] += 1
+            lifetime["valid_cost"] += c["total"]
     lifetime["cost_cny"] = round(lifetime["cost_cny"], 4)
+    lifetime["valid_cost"] = round(lifetime["valid_cost"], 4)
+    lifetime["avg_cost"] = round(lifetime["valid_cost"] / lifetime["valid_runs"], 4) \
+        if lifetime["valid_runs"] else 0.0
     # run 切换器列表（最近 15 个，标注废弃）
     runs_list = [{"name": r.name, "discarded": _is_discarded(r)} for r in runs[:15]]
     run_dir = next((r for r in runs if r.name == run_name), runs[0]) if run_name else runs[0]
