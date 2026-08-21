@@ -48,6 +48,30 @@ def _is_discarded(r: Path) -> bool:
         return False
 
 
+def _declared_tier(r: Path):
+    """架构师拆卡时的显式定级（handoffs/plan.json），返回 (tier, reason) 或 (None, None)"""
+    pj = r / "handoffs" / "plan.json"
+    if not pj.exists():
+        return None, None
+    try:
+        plan = json.loads(pj.read_text(encoding="utf-8"))
+        t = str(plan.get("tier") or "").upper()
+        if t in ("S", "M", "L"):
+            return t, str(plan.get("tier_reason") or "")
+    except Exception:
+        pass
+    return None, None
+
+
+def _heuristic_tier(r: Path) -> str:
+    """历史无标记 run 的兜底规则 C：最高卡预算 ≥25 且 ≥2 张卡 → L；>15 → M；否则 S"""
+    try:
+        cards = reader.load_cards(r)
+        peak = max((cd["budget"] for cd in cards), default=0)
+    except Exception:
+        cards, peak = [], 0
+    return "L" if (peak >= 25 and len(cards) >= 2) else ("M" if peak > 15 else "S")
+
 def export(run_name: str | None = None) -> dict:
     runs = reader.list_runs()
     if not runs:
@@ -69,8 +93,8 @@ def export(run_name: str | None = None) -> dict:
     lifetime["valid_cost"] = round(lifetime["valid_cost"], 4)
     lifetime["avg_cost"] = round(lifetime["valid_cost"] / lifetime["valid_runs"], 4) \
         if lifetime["valid_runs"] else 0.0
-    # 分层基线（T-shirt sizing）：复杂度 = 预算档位 × 拆卡数
-    #   L：最高卡预算 ≥25 且 ≥2 张卡（跨模块多卡协作）  M：预算 >15 的其余  S：≤15
+    # 分层基线（T-shirt sizing）：优先用架构师拆卡时的显式定级（plan.json tier），
+    # 历史无标记 run 回退到启发式规则 C（最高卡预算 ≥25 且 ≥2 卡 → L；>15 → M；否则 S）
     tiers = {"S": {"n": 0, "cost": 0.0}, "M": {"n": 0, "cost": 0.0}, "L": {"n": 0, "cost": 0.0}}
     for r in runs:
         if _is_discarded(r):
@@ -78,12 +102,8 @@ def export(run_name: str | None = None) -> dict:
         c = reader.load_cost(r)
         if c["total"] <= 0:
             continue  # 没产生调用的空 run 不进基线
-        try:
-            cards = reader.load_cards(r)
-            peak = max((cd["budget"] for cd in cards), default=0)
-        except Exception:
-            cards, peak = [], 0
-        tier = "L" if (peak >= 25 and len(cards) >= 2) else ("M" if peak > 15 else "S")
+        declared, _ = _declared_tier(r)
+        tier = declared or _heuristic_tier(r)
         tiers[tier]["n"] += 1
         tiers[tier]["cost"] += c["total"]
     lifetime["tiers"] = {k: {"n": v["n"],
@@ -116,13 +136,18 @@ def export(run_name: str | None = None) -> dict:
             continue
         cs = reader.load_cards(r)
         if cs and all(c["status"] == "todo" for c in cs):
+            pt, preason = _declared_tier(r)
             pending_approvals.append({
                 "run": r.name,
+                "tier": pt or _heuristic_tier(r),
+                "tier_reason": preason or "",
                 "cards": [{"id": c["id"], "title": c["title"], "budget": c["budget"]}
                           for c in cs],
             })
     cards = reader.load_cards(run_dir)
     cost = reader.load_cost(run_dir)
+    dtier, dreason = _declared_tier(run_dir)
+    run_tier = dtier or _heuristic_tier(run_dir)
     events_all = reader.load_events(run_dir)
     # 事件窗口策略：验收/评审事件是证据本体，单独保量（各留 25 条），
     # 其余高频事件（tool 等）留最近 35 条——防止 verify 被刷出窗口导致验收记录空白
@@ -141,6 +166,9 @@ def export(run_name: str | None = None) -> dict:
     return {
         "run": run_dir.name,
         "task": task,
+        "tier": run_tier,
+        "tier_declared": bool(dtier),
+        "tier_reason": dreason or "",
         "totals": {
             "cards": len(cards),
             "done": sum(1 for c in cards if c["status"] == "done"),

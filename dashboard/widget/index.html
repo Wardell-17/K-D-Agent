@@ -486,7 +486,8 @@ function adapt(snap){
     : t.cards > 0 && t.done === t.cards ? "全部通过"
     : (snap.cards || []).some(c => c.status === "doing") ? "执行中" : "待派发";
   return {
-    run: { id: snap.run, status },
+    run: { id: snap.run, status, tier: snap.tier || "",
+           tierDeclared: !!snap.tier_declared, tierReason: esc(snap.tier_reason || "") },
     agents: {
       architect: { name: "Kimi K3", role: "架构师 · 拆任务 / 验收", no: "工号 KD-A01",
         initial: "K", photo: "assets/kimi.png",
@@ -527,7 +528,7 @@ function adapt(snap){
     lifetime: snap.lifetime || null,
     runsList: (snap.runs_list || []).map(r => ({ name: esc(r.name), discarded: !!r.discarded })),
     pending: (snap.pending_approvals || []).map(p => ({
-      run: esc(p.run),
+      run: esc(p.run), tier: esc(p.tier || ""), tierReason: esc(p.tier_reason || ""),
       cards: (p.cards || []).map(c => ({ id: esc(c.id), title: esc(c.title), budget: c.budget || 12 }))
     })),
     blocked: (snap.launched && snap.launched.blocked) ? esc(snap.launched.message || "已有进行中的任务") : null
@@ -553,7 +554,9 @@ function render(data){
   const runs = data.runsList && data.runsList.length ? data.runsList : [{ name: data.run.id }];
   sel.innerHTML = runs.map(r =>
     `<option value="${r.name}" ${r.name === data.run.id ? "selected" : ""}>run ${r.name}${r.discarded ? "（已废弃）" : ""}</option>`).join("");
-  $("#runStatus").textContent = data.run.status;
+  $("#runStatus").textContent = data.run.status +
+    (data.run.tier ? ` · ${data.run.tier} 级${data.run.tierDeclared ? "" : "（估）"}` : "");
+  $("#runStatus").title = data.run.tierReason || "";
   const lt = data.lifetime;
   $("#lifeLine").textContent = lt
     ? `累计 ¥${(lt.cost_cny || 0).toFixed(4)}（${lt.runs} runs，含废弃 ${lt.discarded_runs ?? 0}）· 有效 ${lt.valid_runs ?? lt.runs} 单 · 平均 ¥${(lt.avg_cost ?? 0).toFixed(4)}/单`
@@ -610,6 +613,7 @@ function render(data){
   $("#inbox").innerHTML = pend.map(p => `
     <div class="kd-issue" style="margin-bottom:14px">
       <div class="mono" style="font-size:11px;color:var(--ink-faint)">run ${p.run} · 架构师已拆卡，等你审阅</div>
+      ${p.tier ? `<div style="margin-top:6px;font-size:12px"><span class="kd-tag">定级 ${p.tier}</span> <span class="kd-muted">${p.tierReason}</span></div>` : ""}
       ${p.cards.map(c => `<div style="display:flex;gap:10px;align-items:baseline;margin-top:8px;font-size:13px">
         <span class="mono" style="color:var(--ink-faint);font-size:11px">${c.id}</span>
         <span style="font-family:var(--kd-serif);color:var(--title-ink)">${c.title}</span>
