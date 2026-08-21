@@ -8,7 +8,7 @@
 
 [![Python 3.14](https://img.shields.io/badge/python-3.14-blue)]()
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)]()
-[![实验记录](https://img.shields.io/badge/实验记录-10%20篇-orange)]()
+[![实验记录](https://img.shields.io/badge/实验记录-24%20期-orange)]()
 
 ---
 
@@ -207,24 +207,29 @@ setx TAVILY_API_KEY "tvly-你的检索key（可选，不配则检索自动降级
 > 注意：Kimi 订阅 key 只能走 `https://api.kimi.com/coding/v1` 端点、模型 ID `k3`
 > （已写在 `config.yaml`，无需手改）。
 
-### 4.2 三种启动模式（MVP 编排器）
+### 4.2 启动方式（MVP 编排器）
+
+先记住一句话：**区别只在"卡片从哪来"**——系统永远是"拿到卡片 → 并行执行 → 证据验收"。
+四种方式对应"卡片的四种来源"，按需求清晰度选：
+
+| 方式 | 卡片谁写 | 什么时候用 | 命令 |
+|---|---|---|---|
+| ① 审批门 | 架构师拆，**人审完才执行** | 需求宏观/模糊（默认推荐，审卡约 1 分钱） | 见下方两步 |
+| ② 一句话 | 架构师拆，拆完直接执行 | 需求明确、信得过架构师 | `python orchestrator.py "任务描述"` |
+| ③ 单张手写卡 | 人写（零规划成本） | 任务小而具体，自己能写清验收命令 | `python orchestrator.py --card 卡片.md` |
+| ④ 卡盒批量 | 人写一目录的卡 | 多卡项目、GitHub 远程写卡本地跑 | `python orchestrator.py --cards 卡盒目录` |
 
 ```powershell
 cd architect-engineer
 
-# 模式零：审批门 —— 只拆卡不执行，人审卡/改卡后放行（需求模糊时强烈推荐）
+# 方式① 审批门（分两步）：第一步只拆卡不执行，卡片落在 runs\<时间戳>\tasks\
 python orchestrator.py --plan-only "你的宏观项目描述"
-# 终端会打印卡片目录；审完（可直接改 .md）后放行：
+# 人打开 tasks\ 目录审卡/直接改 .md，确认无误后放行：
 python orchestrator.py --cards "runs\<时间戳>\tasks"
 
-# 模式一：一句话任务 —— 架构师自动拆卡后并行执行
-python orchestrator.py "写一个脚本统计本目录 md 文件行数"
-
-# 模式二：单张手写卡 —— 跳过规划直接执行（省约 40% 架构师成本）
-python orchestrator.py --card path\to\card.md
-
-# 模式三：卡盒批量 —— 一整个项目，依赖感知并行调度
-python orchestrator.py --cards path\to\cardbox
+# 方式②③④ 见上表命令
+# 中断恢复：任何方式跑挂了，用 --resume 接 run 目录续跑（done 卡零成本跳过）
+python orchestrator.py --resume "runs\<时间戳>"
 ```
 
 每次运行生成 `runs/<时间戳>/`，内含：`tasks/*.md`（任务卡全生命周期）、
@@ -278,7 +283,8 @@ depends_on: ["t0"]      # 前置卡 id，全部 done 才可调度；无依赖写
 ### 5.2 写卡纪律（血泪换来的）
 
 1. **并行卡各写各的文件**，禁止并行写同一文件；需要合并就开"集成卡"（009）
-2. 验收命令必须是 **Windows 兼容**（python / dir / findstr / python -c），禁用 Unix 命令（003）
+2. 验收命令必须是 **Windows 兼容**（python / dir / python -c），禁用 Unix 命令（003）；
+   涉及中文内容匹配一律用 python（findstr 在 GBK 代码页下匹配 UTF-8 中文必失败）
 3. 约束写全：编码要求、文件格式、"不许做什么"都要写——工程师看不到对话上下文
 
 示例卡盒：`compare/cardbox-demo/`（基础三卡）、`compare/cardbox-conflict/`（集成卡模式）。
@@ -287,11 +293,11 @@ depends_on: ["t0"]      # 前置卡 id，全部 done 才可调度；无依赖写
 
 | | 路线 A：自建 MVP 编排器 | 路线 B：DeepSeek Harness 移植版 |
 |---|---|---|
-| 位置 | `architect-engineer/orchestrator.py`（约 550 行） | `harness-patches/` + `dsh-home/.agent-presets/` |
+| 位置 | `architect-engineer/orchestrator.py`（约 980 行） | `harness-patches/` + `dsh-home/.agent-presets/` |
 | 底盘 | 自写编排循环 | DeepSeek 官方开源 harness |
 | 优势 | 每行可读、逻辑任意改、按 API 返回精确记账、任务卡/并行/卡盒全套 | Web 界面、成熟工具链、会话持久化可回放 |
 | 定位 | **实验室**：新想法在这里验证（006~010 全部诞生于此） | **日常主力**：实际干活用它 |
-| 启动 | 见 [4.2](#42-三种启动模式mvp-编排器) | `run-dsh-web.ps1` |
+| 启动 | 见 [4.2](#42-启动方式mvp-编排器) | `run-dsh-web.ps1` |
 
 两条线共享同一套思想（双模型路由 + 证据验收），实验在两线间互证（001）。
 
@@ -330,6 +336,7 @@ patch 依赖 harness 内部插件 ID，rc 阶段静默升级会无征兆地坏�
 | 021 | 分层成本基线 + 声明式定级 | T-shirt sizing（S/M/L）；启发式三次试算塌陷后改为架构师拆卡时显式输出 tier+reason 落 plan.json——分级从"事后猜"变"规划时的可审计判断" |
 | 022 | L 级实战题库三单全绿 | 飞控逆向 ¥0.49（7 项数值断言）/ httpbin 跨层 78 passed ¥0.64 / sortedcontainers 重构 307 passed ¥0.71；全部硬断言验收 |
 | 023 | 跨语言盲测五连发 + 定级锚点 | Py×2/TS×2/C++×1 陌生仓库 5/5 交付共 ¥2.12；实锤定级口径漂移（同构题 B-03 判 S、B-04 判 M）→ 提示词加定级锚点，复测同构题稳定判 M（¥0.26） |
+| 024 | 历史数据反哺拆卡（83 单分层统计） | 零成本纯数据分析：实锤 M 级是最不稳定桶（成本极差 24 倍、升级率 0.19/单）、返工集中 M/L、S 级预算过剩但不值得修；两条规律写进架构师提示词（伪 M 上调 L + M/L 建议审批门），反哺闭环完成 |
 
 **累计成本参考**：012 之前的 10 次实验 MVP 运行总成本 < ¥1；013~017 含真实仓库深读，
 单次 ¥0.2~1.9（读真实仓库的固有成本：百万级 token 是源码原文吞吐）。
@@ -429,8 +436,8 @@ patch 依赖 harness 内部插件 ID，rc 阶段静默升级会无征兆地坏�
 - [x] 手稿风战报看板（019：Widget + 数据管道 + 审批门/处置台，替代 Streamlit 原型）
 - [x] 分层成本基线 + 声明式定级（021；含定级锚点一致性修复，023 复测验证）
 - [x] L 级实战题库 + 跨语言盲测靶场（022/023：target-repos/ 八个仓库基线全绿）
-- [ ] 历史 run 数据反哺拆卡决策（返工率 → 粒度调整）——先做一轮分层统计分析出报告，
-  有真规律再写进架构师提示词（数据 → 纪律闭环），不建自动化管道
+- [x] 历史 run 数据反哺拆卡决策（024：83 单分层统计 → 两条真规律写进架构师提示词；
+  未建自动化管道，200+ 单后再议）
 - [ ] 树状合并（5+ 并行卡时的两级集成）——暂缓：009/010 冲突治理后实测最大卡盒仅 3~4 卡，
   合并瓶颈从未真实触发；触发条件：单盒 ≥5 并行卡且集成冲突高发时再启动
 
@@ -448,8 +455,8 @@ agent-project/
 │  ├─ export_state.py         #    数据管道：扫描 runs/ + 账本 → state.json
 │  ├─ widget/index.html       #    看板页面（深夜书房手稿风，源文件在此编辑）
 │  └─ state.json              #    管道产出的最新战报快照
-├─ compare/                   # 实验记录 001~017、账本工具、示例卡盒
-│                             #    （018 起动作较密，先汇总在 §7 实验表，单篇记录后补）
+├─ compare/                   # 实验记录 001~017 + 024、账本工具、示例卡盒
+│                             #    （018~023 动作较密，先汇总在 §7 实验表，单篇记录后补）
 │  ├─ analyze_session.py      #    Harness 会话账本分析
 │  ├─ templates/              #    沉淀的卡模板（repo-recon 仓库调研 v1.0）
 │  ├─ cardbox-demo/           #    示例卡盒：基础三卡
@@ -473,7 +480,7 @@ agent-project/
 3. 《深入理解 AI Agent》（李博杰）——本系统的理论蓝本：
    移交包三要素（10.4.5）、验证器是循环瓶颈（10.4.3.1）、状态栏代码维护（2.6）、
    强模型给规划者（10.4.4）均出自此书
-4. `orchestrator.py` 源码——约 870 行，每处设计都有注释标注出处
+4. `orchestrator.py` 源码——约 980 行，每处设计都有注释标注出处
 
 **致谢**：设计蓝本《深入理解 AI Agent》；DeepSeek Harness 提供路线 B 底盘；
 Gemini 担任"秘书"角色贡献了经典三问（死锁/接力/冲突）与动态拆分构想。

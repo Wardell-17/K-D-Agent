@@ -42,3 +42,15 @@ target-repos/*/
 dashboard/state.json
 dashboard/st.log
 dashboard/st.err
+
+# 工具链二进制（79MB node.exe 等，本机自备不入库）
+tools/
+# 扫描/统计临时产物
+architect-engineer/allfiles.txt
+architect-engineer/dirs.txt
+architect-engineer/search_*.txt
+count_readme.py
+count_stats.py
+summary.txt
+compare/exp021-smoke.err
+*.pdb
