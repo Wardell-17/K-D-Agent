@@ -845,8 +845,10 @@ function launch(mode){
   if (launchCooldown){ toast("刚派发过一单，30 秒冷却中（防重复起 run）"); return; }
   const payload = { action: "launch", task, budget: selectedBudget(), mode };
   if (window.DaimonWidget && window.DaimonWidget.emit){
-    window.DaimonWidget.saveInput({ task, budget: payload.budget, mode });
     window.DaimonWidget.emit("submit", payload);
+    // 发卡后立即清空输入与持久化状态，防刷新/重挂载时陈旧任务被重放
+    $("#taskInput").value = "";
+    window.DaimonWidget.saveInput({});
     displayedRun = null;   // 发卡后解除钉住：主视图自动跟随即将诞生的新 run
     toast(mode === "gate" ? "已派发：架构师拆卡中，稍后到「待审批」放行" : "已派发：任务开始执行，30 秒内自动刷新");
     launchCooldown = true;
