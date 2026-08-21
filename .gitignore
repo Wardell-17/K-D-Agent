@@ -37,7 +37,8 @@ api.txt
 .credentials.yaml
 harness-src/
 harness-src/
-target-repos/
+target-repos/*/
+!target-repos/L级题库.md
 dashboard/state.json
 dashboard/st.log
 dashboard/st.err
