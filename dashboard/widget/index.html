@@ -162,9 +162,6 @@
 }
 .kd-badge .cost .v{font-family:var(--kd-mono);font-variant-numeric:tabular-nums;font-size:15px;color:var(--red)}
 .kd-badge .cost .k{font-family:var(--kd-mono);font-size:10.5px;color:var(--ink-faint)}
-.kd-badge .sharebar{height:3px;background:var(--line);border-radius:2px;margin-top:5px;overflow:hidden}
-.kd-badge.arch .sharebar i{display:block;height:100%;background:var(--indigo)}
-.kd-badge.eng .sharebar i{display:block;height:100%;background:var(--slate)}
 @media (max-width:760px){.kd-badges{grid-template-columns:1fr}}
 
 /* —— 2. 产物清单 —— */
@@ -583,7 +580,6 @@ function render(data){
 
   /* 双模型员工工牌 */
   $("#badges").innerHTML = [a, e].map(g => {
-    const pct = (g.cost / data.billing.totalCost * 100).toFixed(1);
     return `<div class="kd-badge ${g.cls}">
       <div class="photo">
         <div class="ph">${g.initial}</div>
@@ -597,7 +593,6 @@ function render(data){
           <span class="k">本次成本 · ${g.calls} 次调用</span>
           <span class="v">${yen(g.cost)}</span>
         </div>
-        <div class="sharebar"><i style="width:${pct}%"></i></div>
       </div>
     </div>`;
   }).join("");
