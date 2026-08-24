@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import base64
 import urllib.error
 import urllib.request
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -263,6 +264,7 @@ class TaskCard:
     notes: list[str] = field(default_factory=list)  # 返工指令等追加记录
     search_backend: str = ""      # 检索后端路由：""=跟随全局配置；可填 auto/tavily/ddg/deepseek
     budget: int = 0               # ReAct 轮数预算：0=跟随全局默认；深读类任务人工审卡时可加到 20
+    require_visual: bool = False  # 实验 028 第二条腿：产物含图时授予工程师 read_image 自测工具
 
     FRONT_KEYS = ("id", "title", "status", "owner", "created", "updated", "depends_on")
 
@@ -279,6 +281,8 @@ class TaskCard:
             fm.append(f'search_backend: "{esc(self.search_backend)}"')
         if self.budget:
             fm.append(f'budget: {int(self.budget)}')
+        if self.require_visual:
+            fm.append('require_visual: true')
         acc = "\n".join(f"- {a}" for a in self.acceptance) or "- （无）"
         facts = "\n".join(f"- {f}" for f in self.confirmed_facts) or "- （无）"
         refs = "\n".join(f"- {r}" for r in self.artifact_refs) or "- （无）"
@@ -353,7 +357,9 @@ def load_card(path: Path) -> tuple[HandoffPacket, TaskCard]:
                     report=_section(body, "结构化回报"),
                     notes=_bullets(body, "返工与备注"),
                     search_backend=str(fm.get("search_backend", "") or ""),
-                    budget=budget)
+                    budget=budget,
+                    require_visual=str(fm.get("require_visual", "") or "").lower()
+                                   in ("true", "1", "yes"))
     return packet, card
 
 
@@ -500,6 +506,9 @@ class Toolbox:
         self.written: list[str] = []            # 实际写过的文件（供预算耗尽时取证）
         self.events: EventLog | None = None     # 实验 021：看板事件流（可选挂载）
         self.card_id: str = ""
+        # 实验 028 第二条腿：视觉自测（任务卡 require_visual=true 时才授予）
+        self.allow_visual: bool = False
+        self._vision_factory = None             # 惰性构造视觉 LLM 的工厂（由 run_engineer 注入）
 
     def _safe(self, rel: str) -> Path:
         p = (self.workdir / rel).resolve()
@@ -557,6 +566,14 @@ class Toolbox:
             fn("finish", "子任务完成时调用，提交结构化总结（不代表已验收）",
                {"summary": {"type": "string", "description": "做了什么、改了哪些文件、已知风险"}},
                ["summary"]))
+        if self.allow_visual:   # 实验 028 第二条腿：卡级授权的视觉自测
+            tools.append(
+                fn("read_image", "看一眼产物图片做自测（本卡已声明 require_visual）。"
+                   "返回视觉模型对图片的客观描述/对你问题的回答。"
+                   "纪律：这只是自测手段，'通过'由架构师签署，禁止用看图结果自行宣布达标",
+                   {"path": {"type": "string", "description": "图片路径（工作目录内）"},
+                    "question": {"type": "string", "description": "想核验什么，如'标题是否乱码、三根柱数值是否为3/7/5'"}},
+                   ["path", "question"]))
         if self.allow_cmd:
             tools.insert(3, fn("run_command",
                                "在工作目录中执行 shell 命令（有超时与黑名单限制），用于运行测试/脚本",
@@ -612,6 +629,29 @@ class Toolbox:
                                    timeout=self.cmd_timeout, encoding="utf-8", errors="replace")
                 out = (r.stdout + r.stderr).strip()
                 return f"exit={r.returncode}\n{out[:8000]}"
+            if name == "read_image":
+                if not self.allow_visual:
+                    return "错误：本卡未声明 require_visual，无 read_image 权限"
+                p = self._safe_read(args["path"])
+                if p.suffix.lower() not in IMG_EXTS:
+                    return f"错误：不支持的图片格式 {p.suffix}（支持 {sorted(IMG_EXTS)}）"
+                if p.stat().st_size > 5 * 1024 * 1024:
+                    return "错误：图片超过 5MB，请先压缩再读"
+                if not self._vision_factory:
+                    return "错误：视觉后端未配置"
+                mime = ("image/jpeg" if p.suffix.lower() in (".jpg", ".jpeg")
+                        else f"image/{p.suffix.lower().lstrip('.')}")
+                b64 = base64.b64encode(p.read_bytes()).decode()
+                vllm = self._vision_factory()
+                msg = vllm.chat([
+                    {"role": "system", "content":
+                     "你是视觉核验员。只客观描述你亲眼看到的内容并回答用户的问题；"
+                     "不确定就说不确定，禁止编造细节；不要下达'通过/不通过'的判定。"},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": args.get("question", "描述这张图")},
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:{mime};base64,{b64}"}}]}])
+                return "[视觉自测] " + (msg.content or "(无输出)")[:4000]
             return f"错误：未知工具 {name}"
         except Exception as e:  # 纠正机制：错误以文本形式回传，让模型自我恢复
             return f"工具执行异常: {type(e).__name__}: {e}"
@@ -655,9 +695,14 @@ def role_prompt(role: str, key: str, fallback: str) -> str:
 def run_engineer(packet: HandoffPacket, workdir: Path, llm: LLM,
                  search_backend: str = "", system_prompt: str | None = None,
                  allowed_tools: list[str] | None = None,
-                 events: EventLog | None = None, card_id: str = "") -> dict:
+                 events: EventLog | None = None, card_id: str = "",
+                 require_visual: bool = False) -> dict:
     tb = Toolbox(workdir, allowed_tools=allowed_tools)
     tb.events, tb.card_id = events, card_id
+    if require_visual:   # 实验 028 第二条腿：卡级授予视觉自测，后端走视觉模型档案
+        tb.allow_visual = True
+        tb._vision_factory = lambda: LLM("deepseek-v4-flash-vision-exp",
+                                         llm.tracker, role="engineer-vision")
     if search_backend:   # 任务卡级路由覆盖全局默认（实验 014：后端可插拔）
         tb.search_backend = search_backend
     messages = [
@@ -953,7 +998,8 @@ class Orchestrator:
                                system_prompt=role_prompt("engineer", "prompt", ENGINEER_SYS),
                                allowed_tools=(CONFIG.get("roles") or {})
                                              .get("engineer", {}).get("tools"),
-                               events=self.events, card_id=packet.task_id)
+                               events=self.events, card_id=packet.task_id,
+                               require_visual=card.require_visual)
             print(f"[engineer] {eng['status']}: {eng['summary'][:80]}")
             self.events.emit("engineer_status", packet.task_id, status=eng["status"],
                              summary=eng["summary"][:200])
