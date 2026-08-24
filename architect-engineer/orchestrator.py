@@ -576,8 +576,14 @@ class Toolbox:
                    ["path", "question"]))
         if self.allow_cmd:
             tools.insert(3, fn("run_command",
-                               "在工作目录中执行 shell 命令（有超时与黑名单限制），用于运行测试/脚本",
-                               {"command": {"type": "string"}}, ["command"]))
+                               "在工作目录中执行 shell 命令（有黑名单限制），用于运行测试/脚本。"
+                               "默认超时 60 秒；预估更久的任务（装依赖/跑仿真）必须用 timeout 参数"
+                               "主动申报（上限 600 秒）；超时会被强制终止整棵进程树——申报只是"
+                               "延时通行证，不是免死金牌；超过 600 秒的任务禁止前台跑，转后台日志法",
+                               {"command": {"type": "string"},
+                                "timeout": {"type": "integer",
+                                            "description": "超时秒数，默认 60，上限 600"}},
+                               ["command"]))
         if self.allowed_tools is not None:   # 实验 020：角色级工具白名单（finish 永远放行）
             allow = self.allowed_tools | {"finish"}
             tools = [t for t in tools if t["function"]["name"] in allow]
@@ -624,7 +630,15 @@ class Toolbox:
                 cmd = args["command"]
                 if any(d.search(cmd) for d in self.deny):
                     return "错误：命令命中安全黑名单，已拒绝执行"
-                return self._run_cmd(cmd)
+                req = args.get("timeout")
+                if req is not None:
+                    try:
+                        timeout = max(1, min(int(req), 600))   # 申报上限 600 秒
+                    except (TypeError, ValueError):
+                        return "错误：timeout 必须是整数秒数"
+                else:
+                    timeout = self.cmd_timeout
+                return self._run_cmd(cmd, timeout)
             if name == "read_image":
                 if not self.allow_visual:
                     return "错误：本卡未声明 require_visual，无 read_image 权限"
@@ -652,11 +666,13 @@ class Toolbox:
         except Exception as e:  # 纠正机制：错误以文本形式回传，让模型自我恢复
             return f"工具执行异常: {type(e).__name__}: {e}"
 
-    def _run_cmd(self, cmd: str) -> str:
+    def _run_cmd(self, cmd: str, timeout: int | None = None) -> str:
         """进程树治理（实验 034 实锤）：CREATE_NEW_PROCESS_GROUP 给子进程家族
         立户口本，超时用 taskkill /T 杀整棵树——否则孙进程继承管道写端句柄，
         subprocess 的 pipe 永不 EOF，timeout 形同虚设，编排器整体冻结
-        （棋局题装 stockfish 两次挂死的根因）。"""
+        （棋局题装 stockfish 两次挂死的根因）。
+        timeout 可由工程师逐命令申报（上限 600 秒），缺省用全局默认。"""
+        timeout = timeout or self.cmd_timeout
         flags = (subprocess.CREATE_NEW_PROCESS_GROUP
                  if sys.platform == "win32" else 0)
         p = subprocess.Popen(cmd, shell=True, cwd=self.workdir,
@@ -664,7 +680,7 @@ class Toolbox:
                              text=True, encoding="utf-8", errors="replace",
                              creationflags=flags)
         try:
-            out, _ = p.communicate(timeout=self.cmd_timeout)
+            out, _ = p.communicate(timeout=timeout)
             return f"exit={p.returncode}\n{(out or '').strip()[:8000]}"
         except subprocess.TimeoutExpired:
             if sys.platform == "win32":
@@ -676,7 +692,7 @@ class Toolbox:
                 out, _ = p.communicate(timeout=10)
             except subprocess.TimeoutExpired:
                 out = ""
-            return (f"错误：命令超过 {self.cmd_timeout} 秒，已强制终止整棵进程树"
+            return (f"错误：命令超过 {timeout} 秒，已强制终止整棵进程树"
                     f"（含全部孙进程）。已捕获的部分输出：\n{(out or '').strip()[:4000]}")
 
 
