@@ -36,6 +36,28 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+
+# 凭证兜底（实验 031 实锤）：手动 nohup/前台启动时环境常缺 setx 写入注册表的
+# API key，导致 web_search 静默全灭、工程师只能靠记忆答题。Windows 下启动时
+# 从 HKCU\Environment 回填缺失的 key——与 kd_dispatch.ps1 同一策略。
+def _load_registry_keys():
+    if sys.platform != "win32":
+        return
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
+            for name in ("KIMI_API_KEY", "DEEPSEEK_API_KEY", "TAVILY_API_KEY"):
+                if not os.environ.get(name):
+                    try:
+                        os.environ[name] = winreg.QueryValueEx(k, name)[0]
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+
+
+_load_registry_keys()
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
