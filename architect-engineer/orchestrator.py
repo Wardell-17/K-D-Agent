@@ -28,6 +28,14 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+# GBK 控制台防御（实验 029 实锤）：Windows 默认 cp936 无法编码 ✗/📷 等字符，
+# 打印即 UnicodeEncodeError 导致整个编排器崩溃。强制 UTF-8，编码失败降级替换。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
