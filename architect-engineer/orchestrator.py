@@ -624,11 +624,7 @@ class Toolbox:
                 cmd = args["command"]
                 if any(d.search(cmd) for d in self.deny):
                     return "错误：命令命中安全黑名单，已拒绝执行"
-                r = subprocess.run(cmd, shell=True, cwd=self.workdir,
-                                   capture_output=True, text=True,
-                                   timeout=self.cmd_timeout, encoding="utf-8", errors="replace")
-                out = (r.stdout + r.stderr).strip()
-                return f"exit={r.returncode}\n{out[:8000]}"
+                return self._run_cmd(cmd)
             if name == "read_image":
                 if not self.allow_visual:
                     return "错误：本卡未声明 require_visual，无 read_image 权限"
@@ -655,6 +651,33 @@ class Toolbox:
             return f"错误：未知工具 {name}"
         except Exception as e:  # 纠正机制：错误以文本形式回传，让模型自我恢复
             return f"工具执行异常: {type(e).__name__}: {e}"
+
+    def _run_cmd(self, cmd: str) -> str:
+        """进程树治理（实验 034 实锤）：CREATE_NEW_PROCESS_GROUP 给子进程家族
+        立户口本，超时用 taskkill /T 杀整棵树——否则孙进程继承管道写端句柄，
+        subprocess 的 pipe 永不 EOF，timeout 形同虚设，编排器整体冻结
+        （棋局题装 stockfish 两次挂死的根因）。"""
+        flags = (subprocess.CREATE_NEW_PROCESS_GROUP
+                 if sys.platform == "win32" else 0)
+        p = subprocess.Popen(cmd, shell=True, cwd=self.workdir,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, encoding="utf-8", errors="replace",
+                             creationflags=flags)
+        try:
+            out, _ = p.communicate(timeout=self.cmd_timeout)
+            return f"exit={p.returncode}\n{(out or '').strip()[:8000]}"
+        except subprocess.TimeoutExpired:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/PID", str(p.pid), "/F", "/T"],
+                               capture_output=True)
+            else:
+                p.kill()
+            try:
+                out, _ = p.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                out = ""
+            return (f"错误：命令超过 {self.cmd_timeout} 秒，已强制终止整棵进程树"
+                    f"（含全部孙进程）。已捕获的部分输出：\n{(out or '').strip()[:4000]}")
 
 
 # ---------------------------------------------------------------------------
