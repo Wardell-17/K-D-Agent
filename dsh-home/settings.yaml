@@ -3,3 +3,5 @@ ui-onboarding:
 agent-default-model:
   provider: kimi-code
   model: k3
+agent-presets:
+  default: kd-commander

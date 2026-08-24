@@ -145,8 +145,9 @@ class LLM:
         return resp.choices[0].message
 
 
-def ask_json(llm: LLM, system: str, user: str) -> dict:
-    """让模型输出 JSON 并解析；失败则重试一次并要求只输出 JSON。"""
+def ask_json(llm: LLM, system: str, user) -> dict:
+    """让模型输出 JSON 并解析；失败则重试一次并要求只输出 JSON。
+    user 可为 str 或多模态 content 列表（含 image_url 部件，实验 028）。"""
     for attempt in range(2):
         msg = llm.chat([{"role": "system", "content": system},
                         {"role": "user", "content": user}])
@@ -159,6 +160,41 @@ def ask_json(llm: LLM, system: str, user: str) -> dict:
                 pass
         user = "你的上一次输出不是合法 JSON。请只输出一个 JSON 对象，不要任何解释。\n" + text[:500]
     raise RuntimeError(f"{llm.name} 连续两次未能输出合法 JSON")
+
+
+# ---------------------------------------------------------------------------
+# 视觉断言（实验 028：验证器产出图片证据 → 架构师验收时读图，判定权不出让）
+# ---------------------------------------------------------------------------
+IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+def collect_image_parts(workdir: Path, written: list[str]) -> list[dict]:
+    """收集本轮产物中的图片，编码为 OpenAI 多模态 content 部件。
+    纪律：最多 4 张、单张 ≤5MB——视觉 token 便宜（官方 ≤384 tokens/张）但不放纵。"""
+    import base64
+    cands = []
+    for w in written or []:
+        p = Path(w)
+        if not p.is_absolute():
+            p = workdir / w
+        cands.append(p)
+    cands += [p for p in workdir.rglob("*") if p.suffix.lower() in IMG_EXTS]
+    parts, seen = [], set()
+    for p in cands:
+        try:
+            p = p.resolve()
+        except Exception:
+            continue
+        if p in seen or p.suffix.lower() not in IMG_EXTS or not p.is_file():
+            continue
+        if p.stat().st_size > 5 * 1024 * 1024:
+            continue
+        seen.add(p)
+        mime = "image/jpeg" if p.suffix.lower() in (".jpg", ".jpeg") else f"image/{p.suffix.lower().lstrip('.')}"
+        b64 = base64.b64encode(p.read_bytes()).decode()
+        parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+        if len(parts) >= 4:
+            break
+    return parts
 
 
 # ---------------------------------------------------------------------------
@@ -911,9 +947,17 @@ class Orchestrator:
                     f"工程师未走 finish 流程（{eng['status']}）。"
                     f"其实际写过的文件: {eng.get('written_files', [])}。"
                     "请仅以验证器证据与落盘产物判定，不因流程缺失本身否决。")
+            review_user = json.dumps(review_payload, ensure_ascii=False)
+            # 实验 028 视觉断言：产物含图片时，架构师验收直接读图（判定权仍在审核者）
+            img_parts = collect_image_parts(self.workdir, eng.get("written_files", []))
+            if img_parts:
+                review_user = ([{"type": "text", "text": review_user
+                                 + "\n\n（附图：本轮产物中的图片证据，请直接查看核验）"}]
+                               + img_parts)
+                self.events.emit("review", packet.task_id, verdict="📷",
+                                 reason=f"附图 {len(img_parts)} 张进验收")
             review = ask_json(self.architect, role_prompt("architect", "prompt_review",
-                              ARCHITECT_REVIEW_SYS), json.dumps(
-                review_payload, ensure_ascii=False))
+                              ARCHITECT_REVIEW_SYS), review_user)
             self.log_handoff(f"{packet.task_id}-review.json",
                              {"engineer": eng, "verification": ver, "review": review})
             self.events.emit("review", packet.task_id, verdict=review.get("verdict", "?"),
