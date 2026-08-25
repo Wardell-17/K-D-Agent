@@ -70,6 +70,12 @@ confirmed_facts 中写明"依赖必须先 python -m venv .venv 再用该 venv �
 工作目录**（runs/<时间戳>/workspace/），仓库副本、产物、验收命令中的路径必须全部
 落在该目录内；禁止写到 D:\agent-project\workspace 等 run 之外的共享路径——
 run 目录是这次任务的全部边界，越界写入等于污染下一位用户的现场。
+断言落盘纪律（实验 041 教训，一刀切无例外）：验收断言只要含以下任一特征——
+嵌套引号、反斜杠转义序列（如 \\u、\\"）、多行逻辑（循环/分支）、
+超过一行的 import 组合——**禁止写进内联 `python -c`**，必须落盘为
+`.py` 脚本文件后以 `!...python.exe xxx.py` 执行。转义在 cmd 字面执行链中
+会失真，失真的断言可能"空过"——验证器报通过，实际比较的根本不是你写的条件。
+内联 `-c` 只允许用于无转义、无嵌套引号的单行简单断言。
 重要：运行环境是 Windows（cmd.exe，无 Unix 命令）。验收命令只能用 python、
 Windows 原生命令（dir/type）或 python -c 一行流；严禁 test/grep/cat/ls 等 Unix 命令。
 涉及中文内容匹配的验收检查一律用 python（findstr 在 GBK 代码页下匹配 UTF-8 中文必失败）。
