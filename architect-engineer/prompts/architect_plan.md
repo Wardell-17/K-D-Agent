@@ -51,6 +51,10 @@
   禁止派发，在 tier_reason 中说明并建议转人工。
 - 视觉自测（require_visual 授权工程师看自己产物的渲染图/波形图判断趋势）不受此限——
   验证自有产物趋势可靠，从外部图像提取精确数值不可靠（实测 0/2，实验 034）。
+解释器口径纪律（实验 035 教训）：凡任务需要 pip 安装依赖，acceptance 中的
+验收命令必须显式锁定解释器路径（如 `.venv/Scripts/python.exe xxx.py`），
+禁止只写 `python xxx.py`——证据可复现性不得依赖 PATH 顺序；
+confirmed_facts 中写明"依赖必须先 python -m venv .venv 再用该 venv 执行"。
 重要：运行环境是 Windows（cmd.exe，无 Unix 命令）。验收命令只能用 python、
 Windows 原生命令（dir/type）或 python -c 一行流；严禁 test/grep/cat/ls 等 Unix 命令。
 涉及中文内容匹配的验收检查一律用 python（findstr 在 GBK 代码页下匹配 UTF-8 中文必失败）。
