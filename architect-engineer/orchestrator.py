@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import atexit
 import subprocess
 import sys
 import threading
@@ -34,7 +35,9 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 # 打印即 UnicodeEncodeError 导致整个编排器崩溃。强制 UTF-8，编码失败降级替换。
 for _stream in (sys.stdout, sys.stderr):
     try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
+        # line_buffering：后台/nohup 场景下日志即时落盘——进程被杀也留现场，
+        # 监控方不会再被 0 字节日志误导（实验 037 并发事故根因之一）
+        _stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     except Exception:
         pass
 
@@ -866,8 +869,34 @@ class Orchestrator:
         self.cards: dict[str, TaskCard] = {}
         self.tracker = CostTracker(self.run_dir / "cost.jsonl")
         self.events = EventLog(self.run_dir / "events.jsonl")   # 实验 021：看板事件流
+        self._acquire_run_lock()
         self.architect = LLM.for_role("architect", self.tracker)
         self.engineer = LLM.for_role("engineer", self.tracker)
+
+    # ------------------------------------------------------------------
+    # run 锁（实验 037 并发事故）：同一 run 目录同时只允许一个编排器进程。
+    # 卡片里的绝对路径是共享工作现场，两个编排器并发执行同盒卡会互相踩现场、
+    # 重复烧钱——锁文件记录 PID，进程死亡自动失效（stale lock 让位）。
+    # ------------------------------------------------------------------
+    def _acquire_run_lock(self):
+        lock = self.run_dir / ".orchestrator.lock"
+        if lock.exists():
+            try:
+                old_pid = int(lock.read_text().strip())
+                os.kill(old_pid, 0)   # 不发信号，仅探测进程是否存在
+                raise SystemExit(
+                    f"[lock] 拒绝启动：run 目录 {self.run_dir} 已有编排器进程在跑"
+                    f"（PID {old_pid}）。等它结束，或确认它已死亡后删除 {lock.name} 再试。")
+            except ProcessLookupError:
+                pass   # stale lock：持有者已死，让位
+            except PermissionError:
+                raise SystemExit(
+                    f"[lock] 拒绝启动：run 目录被 PID {old_pid} 持有且无权探测，请人工确认。")
+            except ValueError:
+                pass   # 锁文件损坏，按 stale 处理
+        lock.write_text(str(os.getpid()))
+        atexit.register(lambda: lock.exists() and lock.read_text().strip() == str(os.getpid())
+                        and lock.unlink())
 
     def log_handoff(self, name: str, payload: dict):
         (self.run_dir / "handoffs" / name).write_text(
@@ -1134,7 +1163,12 @@ if __name__ == "__main__":
     elif sys.argv[1] == "--cards":
         if len(sys.argv) < 3:
             print("缺少卡盒目录"); sys.exit(1)
-        Orchestrator(f"--cards {sys.argv[2]}").run_cards(Path(sys.argv[2]))
+        cd = Path(sys.argv[2])
+        # 实验 037：卡盒若是某个 run 的 tasks/（plan-only 流程放行场景），
+        # 复用该 run 目录而不是另开新时间戳目录——否则账目散入孤儿目录、
+        # 且多次放行会在同一工作现场并发执行
+        reuse = cd.parent if cd.name == "tasks" and (cd.parent / "handoffs").is_dir() else None
+        Orchestrator(f"--cards {cd}", run_dir=reuse).run_cards(cd)
     elif sys.argv[1] == "--resume":
         if len(sys.argv) < 3:
             print("缺少 run 目录路径"); sys.exit(1)
