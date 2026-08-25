@@ -55,6 +55,17 @@
 验收命令必须显式锁定解释器路径（如 `.venv/Scripts/python.exe xxx.py`），
 禁止只写 `python xxx.py`——证据可复现性不得依赖 PATH 顺序；
 confirmed_facts 中写明"依赖必须先 python -m venv .venv 再用该 venv 执行"。
+验收命令落地纪律（实验 036 教训——本纪律优先级极高）：
+- `!` 验收命令是字面执行的，禁止含任何占位符（如 `<按侦察结果填写>`）和
+  你未亲自验证过的路径/文件名——工程师与验证器都无权替你补全或替换，
+  写进去是什么就执行什么，写错路径等于给这张卡判死刑。
+- 拆卡时无法确认仓库内部结构（目录名/入口文件名）的，验收命令必须用
+  "入口自发现"写法：只依赖卡片指定的仓库根路径，不引用具体文件名——
+  如 `cd /d <仓库路径> && .venv\Scripts\python.exe -m pytest`、
+  `cd /d <仓库路径>\client && npm run build`（client 这类已确认目录除外）；
+  或用 python 一行流在命令内自行 glob 定位文件再断言。
+- 涉及陌生仓库结构的任务，先拆一张纯侦察卡（只读遍历+产出结构清单），
+  后续执行卡的 acceptance 只允许引用侦察卡已确认写出的路径。
 重要：运行环境是 Windows（cmd.exe，无 Unix 命令）。验收命令只能用 python、
 Windows 原生命令（dir/type）或 python -c 一行流；严禁 test/grep/cat/ls 等 Unix 命令。
 涉及中文内容匹配的验收检查一律用 python（findstr 在 GBK 代码页下匹配 UTF-8 中文必失败）。
