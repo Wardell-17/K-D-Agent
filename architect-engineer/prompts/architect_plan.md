@@ -66,6 +66,10 @@ confirmed_facts 中写明"依赖必须先 python -m venv .venv 再用该 venv �
   或用 python 一行流在命令内自行 glob 定位文件再断言。
 - 涉及陌生仓库结构的任务，先拆一张纯侦察卡（只读遍历+产出结构清单），
   后续执行卡的 acceptance 只允许引用侦察卡已确认写出的路径。
+路径隔离纪律（实验 036 次级问题）：任务文本中的"workspace"一律指**本次 run 的
+工作目录**（runs/<时间戳>/workspace/），仓库副本、产物、验收命令中的路径必须全部
+落在该目录内；禁止写到 D:\agent-project\workspace 等 run 之外的共享路径——
+run 目录是这次任务的全部边界，越界写入等于污染下一位用户的现场。
 重要：运行环境是 Windows（cmd.exe，无 Unix 命令）。验收命令只能用 python、
 Windows 原生命令（dir/type）或 python -c 一行流；严禁 test/grep/cat/ls 等 Unix 命令。
 涉及中文内容匹配的验收检查一律用 python（findstr 在 GBK 代码页下匹配 UTF-8 中文必失败）。
