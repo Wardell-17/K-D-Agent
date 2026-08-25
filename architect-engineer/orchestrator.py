@@ -781,7 +781,15 @@ def run_engineer(packet: HandoffPacket, workdir: Path, llm: LLM,
         text_only_streak = 0
         for tc in msg.tool_calls:
             name = tc.function.name
-            args = json.loads(tc.function.arguments or "{}")
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                # 实验 042 防御：模型输出被 max_tokens 截断时 arguments 是残串，
+                # 直接崩溃会丢掉整轮进度——回灌错误让工程师缩小写入重试
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content":
+                    "工具参数 JSON 不完整（疑似输出被截断）。请把过长的内容拆成多次"
+                    " write_file/append 调用，或减少单次写入量后重试。"})
+                continue
             if name == "finish":
                 return {"status": "finished", "summary": args.get("summary", ""),
                         "tool_calls": tb.call_counts, "written_files": tb.written}
