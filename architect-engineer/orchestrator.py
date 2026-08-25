@@ -878,22 +878,33 @@ class Orchestrator:
     # 卡片里的绝对路径是共享工作现场，两个编排器并发执行同盒卡会互相踩现场、
     # 重复烧钱——锁文件记录 PID，进程死亡自动失效（stale lock 让位）。
     # ------------------------------------------------------------------
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        """Windows 兼容的进程存活探测（os.kill(pid,0) 在 Win 上直接 WinError 87）。"""
+        if os.name == "nt":
+            import ctypes
+            h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+            if not h:
+                return False
+            ctypes.windll.kernel32.CloseHandle(h)
+            return True
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
     def _acquire_run_lock(self):
         lock = self.run_dir / ".orchestrator.lock"
         if lock.exists():
             try:
                 old_pid = int(lock.read_text().strip())
-                os.kill(old_pid, 0)   # 不发信号，仅探测进程是否存在
+            except ValueError:
+                old_pid = None   # 锁文件损坏，按 stale 处理
+            if old_pid and self._pid_alive(old_pid):
                 raise SystemExit(
                     f"[lock] 拒绝启动：run 目录 {self.run_dir} 已有编排器进程在跑"
                     f"（PID {old_pid}）。等它结束，或确认它已死亡后删除 {lock.name} 再试。")
-            except ProcessLookupError:
-                pass   # stale lock：持有者已死，让位
-            except PermissionError:
-                raise SystemExit(
-                    f"[lock] 拒绝启动：run 目录被 PID {old_pid} 持有且无权探测，请人工确认。")
-            except ValueError:
-                pass   # 锁文件损坏，按 stale 处理
         lock.write_text(str(os.getpid()))
         atexit.register(lambda: lock.exists() and lock.read_text().strip() == str(os.getpid())
                         and lock.unlink())
