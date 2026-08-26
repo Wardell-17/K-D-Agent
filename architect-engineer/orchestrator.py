@@ -64,6 +64,7 @@ def _load_registry_keys():
 _load_registry_keys()
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 from openai import OpenAI
@@ -468,45 +469,66 @@ def _search_ddg(query: str, max_results: int) -> str | None:
 
 
 def _search_deepseek(query: str, max_results: int) -> str | None:
-    """DeepSeek 服务端联网（实验性）。官方公开 API 暂无检索能力，此驱动走
-    自建兼容端点：需设 DEEPSEEK_SEARCH_BASE_URL / DEEPSEEK_SEARCH_MODEL 环境变量。
-    实验 013 已证明该后端对国内政务/行业数据的时效性最强，但用量计费不可审计，
-    仅在对时效性要求极高的任务卡上显式启用。"""
-    base = os.environ.get("DEEPSEEK_SEARCH_BASE_URL")
+    """DeepSeek 官方端点服务端联网（实验 049：直连 + usage 自记账）。
+    走 api.deepseek.com 的 Anthropic 兼容端点（web_search_20250305 服务端工具，
+    协议形态自 DSH 逆向实证，见 exp015）。计费：响应 usage 由我们自己的
+    CostTracker 落 cost.jsonl（role=engineer-search）——DSH 框架内 TokenMeter
+    不记这笔账是 DSH 的缺口，不遗传给直调方。是否有 token 外的按次调用费
+    待官方账单对账（冒烟后标注）。无 key / 失败 → None，让位降级链。"""
+    key = os.environ.get("DEEPSEEK_API_KEY")
+    if not key:
+        return None
+    base = os.environ.get("DEEPSEEK_SEARCH_BASE_URL",
+                          "https://api.deepseek.com/anthropic/v1")
     model = os.environ.get("DEEPSEEK_SEARCH_MODEL", "deepseek-v4-flash")
-    if not base:
-        return ("[deepseek-search] 未配置：请设置 DEEPSEEK_SEARCH_BASE_URL "
-                "（指向带服务端联网的兼容端点）。公开 api.deepseek.com 不提供检索，"
-                "请改用 tavily / ddg 后端。")
-    key = os.environ.get("DEEPSEEK_API_KEY", "")
-    code, body = _http_json(base.rstrip("/") + "/chat/completions", {
-        "model": model,
+    code, body = _http_json(base.rstrip("/") + "/messages", {
+        "model": model, "max_tokens": 2000,
+        "tools": [{"type": "web_search_20250305", "name": "web_search"}],
         "messages": [{"role": "user", "content":
                       f"联网检索以下问题，返回 {max_results} 条以内结果，"
-                      f"每条含：标题 / URL / 数据发布时间（精确到年月）/ 一句话摘要。\n查询：{query}"}],
-        "max_tokens": 2000})
-    if code == 200:
-        try:
-            content = json.loads(body)["choices"][0]["message"]["content"]
-            return f"[deepseek-search 实验性·用量不可审计] 查询: {query}\n{content}"
-        except (json.JSONDecodeError, KeyError, IndexError):
-            pass
-    return f"[deepseek-search] HTTP {code}: {body[:300]}"
+                      f"每条含：标题 / URL / 数据发布时间（精确到年月）/ 一句话摘要。\n查询：{query}"}]},
+        timeout=60,
+        headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+    if code != 200:
+        print(f"[deepseek-search] HTTP {code}: {body[:300]}", file=sys.stderr)
+        return None
+    try:
+        resp = json.loads(body)
+        texts = [b.get("text", "") for b in resp.get("content", [])
+                 if b.get("type") == "text"]
+        content = "\n".join(t for t in texts if t).strip()
+        usage = resp.get("usage") or {}
+        if _ACTIVE_TRACKER is not None and usage:
+            cfg = CONFIG["models"][(CONFIG.get("roles") or {})
+                                   .get("engineer", {}).get("model_profile", "engineer")]
+            _ACTIVE_TRACKER.record(
+                "engineer-search", cfg,
+                SimpleNamespace(prompt_tokens=usage.get("input_tokens", 0),
+                                completion_tokens=usage.get("output_tokens", 0),
+                                prompt_cache_hit_tokens=0))
+        return f"[deepseek-search] 查询: {query}\n{content}" if content else None
+    except (json.JSONDecodeError, KeyError, IndexError):
+        return None
 
 
 SEARCH_DRIVERS = {"tavily": _search_tavily, "brave": _search_brave,
                   "ddg": _search_ddg, "deepseek": _search_deepseek}
-SEARCH_FALLBACK = ("tavily", "brave", "ddg")   # auto 模式的降级链（实验 047：brave 入链）
+SEARCH_FALLBACK = ("tavily", "deepseek")   # auto 降级链（实验 049：Brave 资费否决出局，
+                                           # deepseek 直连官方端点入链，自记账可审计）
+
+# 实验 049：检索驱动的成本记账钩子。编排器启动时挂入 CostTracker，
+# 冒烟/单测可挂临时 tracker；为 None 时驱动照常工作，仅不记账。
+_ACTIVE_TRACKER: "CostTracker | None" = None
 
 
 def web_search(query: str, max_results: int = 5, backend: str = "auto") -> str:
-    """可插拔检索入口。backend: auto（tavily→brave→ddg 降级）或 SEARCH_DRIVERS 中的具体驱动名。"""
+    """可插拔检索入口。backend: auto（tavily→deepseek 降级，实验 049）或 SEARCH_DRIVERS 中的具体驱动名。"""
     if backend == "auto":
         for name in SEARCH_FALLBACK:
             out = SEARCH_DRIVERS[name](query, max_results)
             if out:
                 return out
-        return "检索失败：auto 降级链（tavily→brave→ddg）均不可用"
+        return "检索失败：auto 降级链（tavily→deepseek）均不可用"
     driver = SEARCH_DRIVERS.get(backend)
     if not driver:
         return f"错误：未知检索后端 '{backend}'，可选: auto / {', '.join(SEARCH_DRIVERS)}"
@@ -911,6 +933,8 @@ class Orchestrator:
         self.tasks_dir.mkdir(exist_ok=True)
         self.cards: dict[str, TaskCard] = {}
         self.tracker = CostTracker(self.run_dir / "cost.jsonl")
+        global _ACTIVE_TRACKER
+        _ACTIVE_TRACKER = self.tracker   # 实验 049：检索驱动记账钩子
         self.events = EventLog(self.run_dir / "events.jsonl")   # 实验 021：看板事件流
         self._acquire_run_lock()
         self.architect = LLM.for_role("architect", self.tracker)
