@@ -265,7 +265,7 @@ class TaskCard:
     depends_on: list[str] = field(default_factory=list)  # 前置卡 id，全部 done 才可调度
     report: str = ""              # 结构化回报（工程师 finish 后由编排器填入）
     notes: list[str] = field(default_factory=list)  # 返工指令等追加记录
-    search_backend: str = ""      # 检索后端路由：""=跟随全局配置；可填 auto/tavily/ddg/deepseek
+    search_backend: str = ""      # 检索后端路由：""=跟随全局配置；可填 auto/tavily/brave/ddg/deepseek
     budget: int = 0               # ReAct 轮数预算：0=跟随全局默认；深读类任务人工审卡时可加到 20
     require_visual: bool = False  # 实验 028 第二条腿：产物含图时授予工程师 read_image 自测工具
 
@@ -370,12 +370,15 @@ def load_card(path: Path) -> tuple[HandoffPacket, TaskCard]:
 # 联网检索（可插拔后端：Tavily 主力 → DuckDuckGo 免费降级；直连失败自动走本地代理）
 # 设计约束：返回结构化"标题+URL+摘要"，证据优先官方域名；调用计入工具计数。
 # ---------------------------------------------------------------------------
-def _http_json(url: str, payload: dict | None, timeout: int = 20) -> tuple[int, str]:
-    """最小 HTTP 封装：先直连，失败后走本地代理（Clash 7890）。返回 (状态码, 响应体)。"""
+def _http_json(url: str, payload: dict | None, timeout: int = 20,
+               headers: dict | None = None) -> tuple[int, str]:
+    """最小 HTTP 封装：先直连，失败后走本地代理（Clash 7890）。返回 (状态码, 响应体)。
+    headers 参数（实验 047：Brave 需要 X-Subscription-Token 鉴权头）会与默认头合并。"""
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    req = urllib.request.Request(url, data=data,
-                                 headers={"Content-Type": "application/json",
-                                          "User-Agent": "Mozilla/5.0"})
+    base_headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+    if headers:
+        base_headers.update(headers)
+    req = urllib.request.Request(url, data=data, headers=base_headers)
     for proxy in (None, "http://127.0.0.1:7890"):
         try:
             opener = urllib.request.build_opener(
@@ -417,6 +420,33 @@ def _search_tavily(query: str, max_results: int) -> str | None:
     if code in (429, 432):
         return None  # 额度耗尽 → 降级
     return f"[Tavily] HTTP {code}: {body[:300]}"
+
+
+def _search_brave(query: str, max_results: int) -> str | None:
+    """Brave Search API（免费档 2000 次/月，独立额度池，实验 047 新增）。
+    需 BRAVE_API_KEY 环境变量。无 key / 额度耗尽 / 无结果 → None（降级给链上下一位）。"""
+    key = os.environ.get("BRAVE_API_KEY")
+    if not key:
+        return None
+    q = urllib.parse.quote(query)
+    url = f"https://api.search.brave.com/res/v1/web/search?q={q}&count={max_results}"
+    code, body = _http_json(url, None, headers={
+        "Accept": "application/json", "X-Subscription-Token": key})
+    if code == 200:
+        try:
+            results = json.loads(body).get("web", {}).get("results", [])
+            if results:
+                lines = [f"[Brave] 查询: {query}"]
+                for i, r in enumerate(results[:max_results], 1):
+                    lines.append(f"{i}. {r.get('title', '')}\n   {r.get('url', '')}\n"
+                                 f"   {(r.get('description') or '')[:300]}")
+                return "\n".join(lines)
+        except json.JSONDecodeError:
+            pass
+        return None
+    if code == 429:
+        return None  # 额度耗尽 → 降级
+    return f"[Brave] HTTP {code}: {body[:300]}"
 
 
 def _search_ddg(query: str, max_results: int) -> str | None:
@@ -464,19 +494,19 @@ def _search_deepseek(query: str, max_results: int) -> str | None:
     return f"[deepseek-search] HTTP {code}: {body[:300]}"
 
 
-SEARCH_DRIVERS = {"tavily": _search_tavily, "ddg": _search_ddg,
-                  "deepseek": _search_deepseek}
-SEARCH_FALLBACK = ("tavily", "ddg")   # auto 模式的降级链
+SEARCH_DRIVERS = {"tavily": _search_tavily, "brave": _search_brave,
+                  "ddg": _search_ddg, "deepseek": _search_deepseek}
+SEARCH_FALLBACK = ("tavily", "brave", "ddg")   # auto 模式的降级链（实验 047：brave 入链）
 
 
 def web_search(query: str, max_results: int = 5, backend: str = "auto") -> str:
-    """可插拔检索入口。backend: auto（tavily→ddg 降级）或 SEARCH_DRIVERS 中的具体驱动名。"""
+    """可插拔检索入口。backend: auto（tavily→brave→ddg 降级）或 SEARCH_DRIVERS 中的具体驱动名。"""
     if backend == "auto":
         for name in SEARCH_FALLBACK:
             out = SEARCH_DRIVERS[name](query, max_results)
             if out:
                 return out
-        return "检索失败：auto 降级链（tavily→ddg）均不可用"
+        return "检索失败：auto 降级链（tavily→brave→ddg）均不可用"
     driver = SEARCH_DRIVERS.get(backend)
     if not driver:
         return f"错误：未知检索后端 '{backend}'，可选: auto / {', '.join(SEARCH_DRIVERS)}"
