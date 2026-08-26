@@ -807,6 +807,7 @@ def verify(packet: HandoffPacket, workdir: Path) -> dict:
     """执行 acceptance 中的 shell 检查（以 '!' 开头的条目），其余条目留给架构师评判。"""
     evidence, ok = [], True
     for item in packet.acceptance:
+        item = item.strip().strip("`").strip()  # 实验 045：容忍 markdown 反引号包裹的验收命令
         if item.startswith("!"):
             cmd = item[1:].strip()
             try:
@@ -820,6 +821,10 @@ def verify(packet: HandoffPacket, workdir: Path) -> dict:
             except Exception as e:
                 evidence.append({"check": cmd, "passed": False, "output": str(e)})
                 ok = False
+    if not evidence:  # 实验 045：零条可执行命令 ≠ 通过（防空证据 vacuous pass）
+        ok = False
+        evidence.append({"check": "(parser)", "passed": False,
+                         "output": "验收标准中未解析到任何以 '!' 开头的可执行命令，验收无法成立"})
     return {"all_passed": ok, "evidence": evidence}
 
 
