@@ -219,10 +219,10 @@ LLM 的自汇报不可信。本系统铁律：**绝不让 LLM 替自己做结论
 # 1. Python 3.12+，装依赖
 pip install openai pyyaml
 
-# 2. 三个 API key 永久存为系统变量（设完重开终端生效）
+# 2. API key 永久存为系统变量（设完重开终端生效；前两个必填，第三个可选）
 setx KIMI_API_KEY "sk-kimi-你的订阅key"
 setx DEEPSEEK_API_KEY "sk-你的deepseek-key"
-setx TAVILY_API_KEY "tvly-你的检索key（可选，不配则检索自动降级 DuckDuckGo）"
+setx TAVILY_API_KEY "tvly-你的检索key（可选：不配或额度耗尽时检索自动降级 DeepSeek 直连，自记账 ≈¥0.04/次）"
 ```
 
 > 注意：Kimi 订阅 key 只能走 `https://api.kimi.com/coding/v1` 端点、模型 ID `k3`
@@ -316,7 +316,7 @@ depends_on: ["t0"]      # 前置卡 id，全部 done 才可调度；无依赖写
 
 | | 路线 A：自建 MVP 编排器 | 路线 B：DeepSeek Harness 移植版 |
 |---|---|---|
-| 位置 | `architect-engineer/orchestrator.py`（约 980 行） | `harness-patches/` + `dsh-home/.agent-presets/` |
+| 位置 | `architect-engineer/orchestrator.py`（约 1260 行） | `harness-patches/` + `dsh-home/.agent-presets/` |
 | 底盘 | 自写编排循环 | DeepSeek 官方开源 harness |
 | 优势 | 每行可读、逻辑任意改、按 API 返回精确记账、任务卡/并行/卡盒全套 | Web 界面、成熟工具链、会话持久化可回放 |
 | 定位 | **实验室**：新想法在这里验证（006~010 全部诞生于此） | **日常主力**：实际干活用它 |
@@ -612,7 +612,8 @@ M 桶为历史混合口径；037/045 两个事故单已勘误不计入格子但�
   可核查事实（如独立检索核实数据）。
 - **上下文边界**：工程师读文件单页 20000 字符（成本防线），但已支持 offset 翻页 +
   返回头导航（017 实测工程师会自发"先定位符号再跳页"）；拆卡时仍要保证输入/产物"可咀嚼"。
-- **工具边界**：工程师已配 `web_search`（可插拔后端：auto/tavily/ddg/deepseek，任务卡级路由 + 查询去重，实验 012/014）；
+- **工具边界**：工程师已配 `web_search`（可插拔后端：auto（tavily→deepseek）/tavily/deepseek
+  /brave（保留未入链）/ddg（占位），任务卡级路由 + 查询去重，实验 012/014/049）；
   无视觉能力，含图任务走 Harness 线（K3 读图）
 - **审核者本身会错**：架构师也是 LLM，文字判据部分依赖其判断力——最终兜底永远是人，
   因此系统提供 `--plan-only` 审批门：执行前人工审卡，把纠偏成本降到零。
@@ -685,8 +686,8 @@ agent-project/
 │  ├─ export_state.py         #    数据管道：扫描 runs/ + 账本 → state.json
 │  ├─ widget/index.html       #    看板页面（深夜书房手稿风，源文件在此编辑）
 │  └─ state.json              #    管道产出的最新战报快照
-├─ compare/                   # 实验记录 001~017 + 024、账本工具、示例卡盒
-│                             #    （018~023 动作较密，先汇总在 §7 实验表，单篇记录后补）
+├─ compare/                   # 实验记录 001~052、账本工具、示例卡盒
+│                             #    （018~023 动作较密，汇总在 §7 实验表；029 起逐篇单记）
 │  ├─ analyze_session.py      #    Harness 会话账本分析
 │  ├─ templates/              #    沉淀的卡模板（repo-recon 仓库调研 v1.0）
 │  ├─ cardbox-demo/           #    示例卡盒：基础三卡
@@ -710,7 +711,7 @@ agent-project/
 3. 《深入理解 AI Agent》（李博杰）——本系统的理论蓝本：
    移交包三要素（10.4.5）、验证器是循环瓶颈（10.4.3.1）、状态栏代码维护（2.6）、
    强模型给规划者（10.4.4）均出自此书
-4. `orchestrator.py` 源码——约 980 行，每处设计都有注释标注出处
+4. `orchestrator.py` 源码——约 1260 行，每处设计都有注释标注出处
 
 **致谢**：设计蓝本《深入理解 AI Agent》；DeepSeek Harness 提供路线 B 底盘；
 Gemini 担任"秘书"角色贡献了经典三问（死锁/接力/冲突）与动态拆分构想。
