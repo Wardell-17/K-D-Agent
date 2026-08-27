@@ -5,3 +5,5 @@ agent-default-model:
   model: k3
 agent-presets:
   default: kd-commander
+ui-theme:
+  preference: dark
