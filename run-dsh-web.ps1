@@ -1,4 +1,4 @@
-﻿# 启动双模型 Agent Web 版（路径自适应：脚本所在目录即项目根，公司/家里通用）
+# 启动双模型 Agent Web 版（路径自适应：脚本所在目录即项目根，公司/家里通用）
 $env:DEEPSEEK_API_KEY=[Environment]::GetEnvironmentVariable('DEEPSEEK_API_KEY','User')
 $env:KIMI_API_KEY=[Environment]::GetEnvironmentVariable('KIMI_API_KEY','User')
 
@@ -11,8 +11,9 @@ $ROOT = $PSScriptRoot
 $env:DSH_HOME = Join-Path $ROOT 'dsh-home'
 Set-Location $ROOT
 
-# dsh 版本钉死：升级时改这里，验证通过后再提交（流程见 README 第 6.1 节）
-$DSH_VERSION = '0.1.0-rc.6'
+# dsh 版本（仅 npx 兜底用；项目内 npm-global 有本地安装时优先用本地）。
+# 升级协议（README 6.1）：升级后跑 compare/smoke_dsh.py 过闸，全绿才放行。
+$DSH_VERSION = '0.1.1-rc.2'
 
 # 优先用项目内已装的 dsh（离线也能跑）；没有则 npx 拉指定版本
 $localDsh = Join-Path $ROOT 'npm-global\dsh.cmd'
